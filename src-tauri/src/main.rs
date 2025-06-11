@@ -118,6 +118,7 @@ async fn get_block_audio_timestamp(
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             // Initialize database
             let database = tauri::async_runtime::block_on(async {

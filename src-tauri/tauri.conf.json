@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.gita.app",
   "build": {
-    "beforeDevCommand": "cd ../frontend; npm run start",
-    "beforeBuildCommand": "cd ../frontend; npm run build",
+    "beforeDevCommand": "powershell -c \"Push-Location ../frontend; npm run dev; Pop-Location\"",
+    "beforeBuildCommand": "powershell -c \"Push-Location ../frontend; npm run build; Pop-Location\"",
     "devUrl": "http://localhost:3000",
     "frontendDist": "../frontend/build"
   },
@@ -28,7 +28,13 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": [],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
     "resources": [],
     "externalBin": [],
     "copyright": "",
