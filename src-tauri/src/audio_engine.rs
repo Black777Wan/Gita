@@ -1,13 +1,14 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Host, Stream, SupportedStreamConfig};
+use cpal::{Device, Host};
 use hound::{WavSpec, WavWriter};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use anyhow::{Result, anyhow};
 use crate::models::AudioDevice;
 
+// Simple audio engine that doesn't store streams in shared state
 pub struct AudioEngine {
     host: Host,
     recording_state: Arc<Mutex<RecordingState>>,
@@ -16,10 +17,10 @@ pub struct AudioEngine {
 struct RecordingState {
     is_recording: bool,
     start_time: Option<Instant>,
-    _mic_stream: Option<Stream>,
-    _system_stream: Option<Stream>,
     writer_thread: Option<thread::JoinHandle<()>>,
-    audio_sender: Option<Sender<AudioSample>>,
+    recording_file_path: Option<String>,
+    // Store a stop signal instead of the actual streams
+    stop_sender: Option<Sender<()>>,
 }
 
 #[derive(Clone)]
@@ -36,10 +37,9 @@ impl AudioEngine {
         let recording_state = Arc::new(Mutex::new(RecordingState {
             is_recording: false,
             start_time: None,
-            _mic_stream: None,
-            _system_stream: None,
             writer_thread: None,
-            audio_sender: None,
+            recording_file_path: None,
+            stop_sender: None,
         }));
 
         Ok(AudioEngine {
@@ -86,9 +86,7 @@ impl AudioEngine {
         }
 
         Ok(devices)
-    }
-
-    pub fn start_recording(&mut self, file_path: &str) -> Result<()> {
+    }    pub fn start_recording(&self, file_path: &str) -> Result<()> {
         let mut state = self.recording_state.lock().unwrap();
         
         if state.is_recording {
@@ -96,7 +94,8 @@ impl AudioEngine {
         }
 
         // Create audio channel for communication between streams and writer
-        let (sender, receiver) = mpsc::channel::<AudioSample>();
+        let (audio_sender, receiver) = mpsc::channel::<AudioSample>();
+        let (stop_sender, stop_receiver) = mpsc::channel::<()>();
 
         // Start the audio writer thread
         let file_path = file_path.to_string();
@@ -104,82 +103,112 @@ impl AudioEngine {
             Self::audio_writer_thread(receiver, &file_path);
         });
 
-        // Get default input device (microphone)
-        let input_device = self.host.default_input_device()
-            .ok_or_else(|| anyhow!("No default input device available"))?;
-
-        // Get default output device (for loopback)
-        let output_device = self.host.default_output_device()
-            .ok_or_else(|| anyhow!("No default output device available"))?;
-
-        // Start microphone stream
-        let mic_stream = self.create_input_stream(&input_device, sender.clone())?;
-        
-        // Start system audio loopback stream (this is platform-specific and complex)
-        // For now, we'll focus on microphone recording
-        // In a full implementation, you'd need platform-specific code for system audio capture
-        let system_stream = None; // TODO: Implement system audio loopback
-
-        mic_stream.play()?;
+        // Create a new host for the audio thread instead of cloning
+        let audio_thread = thread::spawn(move || {
+            let host = cpal::default_host();
+            Self::audio_recording_thread(host, audio_sender, stop_receiver);
+        });
 
         state.is_recording = true;
         state.start_time = Some(Instant::now());
-        state._mic_stream = Some(mic_stream);
-        state._system_stream = system_stream;
         state.writer_thread = Some(writer_thread);
-        state.audio_sender = Some(sender);
+        state.recording_file_path = Some(file_path.to_string());
+        state.stop_sender = Some(stop_sender);
+
+        // We need to keep the audio thread alive, but we can't store it in state
+        // For now, we'll detach it - in a production app you'd want better lifecycle management
+        std::mem::forget(audio_thread);
 
         Ok(())
     }
 
-    pub fn stop_recording(&mut self) -> Result<i32> {
+    pub fn stop_recording(&self) -> Result<i32> {
         let mut state = self.recording_state.lock().unwrap();
         
         if !state.is_recording {
             return Err(anyhow!("Not currently recording"));
         }
 
-        let duration = state.start_time
-            .map(|start| start.elapsed().as_secs() as i32)
-            .unwrap_or(0);
+        // Send stop signal to audio thread
+        if let Some(stop_sender) = state.stop_sender.take() {
+            let _ = stop_sender.send(());
+        }
 
-        // Stop streams
-        state._mic_stream = None;
-        state._system_stream = None;
-
-        // Close audio channel
-        state.audio_sender = None;
+        let duration = if let Some(start_time) = state.start_time {
+            start_time.elapsed().as_secs() as i32
+        } else {
+            0
+        };
 
         // Wait for writer thread to finish
-        if let Some(thread) = state.writer_thread.take() {
-            let _ = thread.join();
+        if let Some(writer_thread) = state.writer_thread.take() {
+            let _ = writer_thread.join();
         }
 
         state.is_recording = false;
         state.start_time = None;
+        state.recording_file_path = None;
 
         Ok(duration)
     }
 
-    fn create_input_stream(&self, device: &Device, sender: Sender<AudioSample>) -> Result<Stream> {
+    fn audio_recording_thread(
+        host: Host,
+        audio_sender: Sender<AudioSample>,
+        stop_receiver: Receiver<()>,
+    ) {
+        // Get default input device (microphone)
+        let input_device = match host.default_input_device() {
+            Some(device) => device,
+            None => {
+                eprintln!("No default input device available");
+                return;
+            }
+        };
+
+        // Create input stream
+        let stream = match Self::create_input_stream_static(&input_device, audio_sender) {
+            Ok(stream) => stream,
+            Err(e) => {
+                eprintln!("Failed to create input stream: {}", e);
+                return;
+            }
+        };
+
+        // Start the stream
+        if let Err(e) = stream.play() {
+            eprintln!("Failed to start audio stream: {}", e);
+            return;
+        }
+
+        // Keep the stream alive until stop signal is received
+        let _ = stop_receiver.recv();
+        
+        // Stream is automatically stopped when dropped
+        drop(stream);
+    }
+
+    fn create_input_stream_static(
+        device: &Device,
+        sender: Sender<AudioSample>,
+    ) -> Result<cpal::Stream> {
         let config = device.default_input_config()?;
         
         let stream = match config.sample_format() {
-            cpal::SampleFormat::F32 => self.create_input_stream_typed::<f32>(device, &config.into(), sender)?,
-            cpal::SampleFormat::I16 => self.create_input_stream_typed::<i16>(device, &config.into(), sender)?,
-            cpal::SampleFormat::U16 => self.create_input_stream_typed::<u16>(device, &config.into(), sender)?,
+            cpal::SampleFormat::F32 => Self::create_input_stream_typed_static::<f32>(device, &config.into(), sender)?,
+            cpal::SampleFormat::I16 => Self::create_input_stream_typed_static::<i16>(device, &config.into(), sender)?,
+            cpal::SampleFormat::U16 => Self::create_input_stream_typed_static::<u16>(device, &config.into(), sender)?,
             _ => return Err(anyhow!("Unsupported sample format")),
         };
 
         Ok(stream)
     }
 
-    fn create_input_stream_typed<T>(
-        &self,
+    fn create_input_stream_typed_static<T>(
         device: &Device,
         config: &cpal::StreamConfig,
         sender: Sender<AudioSample>,
-    ) -> Result<Stream>
+    ) -> Result<cpal::Stream>
     where
         T: cpal::Sample + cpal::SizedSample + Send + 'static,
         f32: cpal::FromSample<T>,
@@ -198,9 +227,12 @@ impl AudioEngine {
                     channels,
                 };
 
-                let _ = sender.send(audio_sample);
+                // Send audio data to writer thread
+                if sender.send(audio_sample).is_err() {
+                    // Writer thread has stopped, stream should stop too
+                }
             },
-            |err| eprintln!("Audio input error: {}", err),
+            |err| eprintln!("Audio stream error: {}", err),
             None,
         )?;
 
@@ -253,4 +285,3 @@ impl AudioEngine {
         }
     }
 }
-

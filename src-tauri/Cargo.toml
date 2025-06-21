@@ -25,6 +25,7 @@ anyhow = "1.0"
 cpal = "0.15"
 hound = "3.5"
 crossbeam-channel = "0.5"
+dotenvy = "0.15"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

@@ -77,7 +77,7 @@ async fn start_recording(
         .map_err(|e| e.to_string())?;
     
     // Start audio capture
-    let mut engine = audio_engine.lock().unwrap();
+    let engine = audio_engine.lock().unwrap();
     engine.start_recording(&file_path).map_err(|e| e.to_string())?;
     
     Ok(recording_id)
@@ -89,9 +89,11 @@ async fn stop_recording(
     audio_engine: tauri::State<'_, Arc<Mutex<AudioEngine>>>,
     db: tauri::State<'_, Database>,
 ) -> Result<(), String> {
-    // Stop audio capture
-    let mut engine = audio_engine.lock().unwrap();
-    let duration = engine.stop_recording().map_err(|e| e.to_string())?;
+    // Stop audio capture and get duration
+    let duration = {
+        let engine = audio_engine.lock().unwrap();
+        engine.stop_recording().map_err(|e| e.to_string())?
+    }; // Mutex guard is dropped here
     
     // Update recording duration in database
     db.update_recording_duration(&recording_id, duration).await
@@ -117,6 +119,9 @@ async fn get_block_audio_timestamp(
 }
 
 fn main() {
+    // Load environment variables from .env file
+    dotenvy::dotenv().ok();
+    
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {

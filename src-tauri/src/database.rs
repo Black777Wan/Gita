@@ -1,4 +1,4 @@
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 use anyhow::Result;
 use chrono::Utc;
 use crate::models::*;
@@ -9,10 +9,11 @@ pub struct Database {
 
 impl Database {
     pub async fn new() -> Result<Self> {
-        // In a real application, this would come from environment variables
-        let database_url = "postgresql://gita_user:12345@localhost/gita_db";
+        // Get database URL from environment variable or use default
+        let database_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgresql://gita_user:12345@localhost/gita_db".to_string());
         
-        let pool = PgPool::connect(database_url).await?;
+        let pool = PgPool::connect(&database_url).await?;
         
         // Run migrations
         sqlx::migrate!("./migrations").run(&pool).await?;
