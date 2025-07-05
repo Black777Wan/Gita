@@ -4,18 +4,19 @@
 mod database;
 mod audio_engine;
 mod models;
+mod datomic_schema;
 
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
-use database::Database;
 use audio_engine::AudioEngine;
 use models::*;
+use database::DatomicClient;
 
 // Tauri commands for database operations
 #[tauri::command]
 async fn get_daily_note(
     date: String,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, DatomicClient>,
 ) -> Result<Vec<Block>, String> {
     db.get_daily_note(&date).await.map_err(|e| e.to_string())
 }
@@ -24,16 +25,20 @@ async fn get_daily_note(
 async fn create_block(
     block_data: CreateBlockRequest,
     audio_meta: Option<AudioMeta>,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, DatomicClient>,
 ) -> Result<Block, String> {
-    db.create_block(block_data, audio_meta).await.map_err(|e| e.to_string())
+    let block = db.create_block(block_data, audio_meta.clone()).await.map_err(|e| e.to_string())?;
+    if let Some(audio_meta) = audio_meta {
+        db.create_audio_timestamp(&block.id, &audio_meta.recording_id, audio_meta.timestamp).await.map_err(|e| e.to_string())?;
+    }
+    Ok(block)
 }
 
 #[tauri::command]
 async fn update_block_content(
     block_id: String,
     content: String,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, DatomicClient>,
 ) -> Result<(), String> {
     db.update_block_content(&block_id, &content).await.map_err(|e| e.to_string())
 }
@@ -41,7 +46,7 @@ async fn update_block_content(
 #[tauri::command]
 async fn get_page_by_title(
     title: String,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, DatomicClient>,
 ) -> Result<Option<Block>, String> {
     db.get_page_by_title(&title).await.map_err(|e| e.to_string())
 }
@@ -49,7 +54,7 @@ async fn get_page_by_title(
 #[tauri::command]
 async fn get_block_children(
     parent_id: String,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, DatomicClient>,
 ) -> Result<Vec<Block>, String> {
     db.get_block_children(&parent_id).await.map_err(|e| e.to_string())
 }
@@ -57,7 +62,7 @@ async fn get_block_children(
 #[tauri::command]
 async fn delete_block(
     block_id: String,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, DatomicClient>,
 ) -> Result<(), String> {
     db.delete_block(&block_id).await.map_err(|e| e.to_string())
 }
@@ -67,7 +72,7 @@ async fn delete_block(
 async fn start_recording(
     page_id: String,
     audio_engine: tauri::State<'_, Arc<Mutex<AudioEngine>>>,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, DatomicClient>,
 ) -> Result<String, String> {
     let recording_id = uuid::Uuid::new_v4().to_string();
     let file_path = format!("/home/ubuntu/gita/audio/{}.wav", recording_id);
@@ -87,7 +92,7 @@ async fn start_recording(
 async fn stop_recording(
     recording_id: String,
     audio_engine: tauri::State<'_, Arc<Mutex<AudioEngine>>>,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, DatomicClient>,
 ) -> Result<(), String> {
     // Stop audio capture and get duration
     let duration = {
@@ -113,7 +118,7 @@ async fn get_audio_devices(
 #[tauri::command]
 async fn get_block_audio_timestamp(
     block_id: String,
-    db: tauri::State<'_, Database>,
+    db: tauri::State<'_, DatomicClient>,
 ) -> Result<Option<AudioTimestamp>, String> {
     db.get_block_audio_timestamp(&block_id).await.map_err(|e| e.to_string())
 }
@@ -125,9 +130,9 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            // Initialize database
-            let database = tauri::async_runtime::block_on(async {
-                Database::new().await.expect("Failed to initialize database")
+            // Initialize Datomic client
+            let datomic_client = tauri::async_runtime::block_on(async {
+                DatomicClient::new().await.expect("Failed to initialize Datomic client")
             });
             
             // Initialize audio engine
@@ -139,7 +144,7 @@ fn main() {
             std::fs::create_dir_all("/home/ubuntu/gita/audio")
                 .expect("Failed to create audio directory");
             
-            app.manage(database);
+            app.manage(datomic_client);
             app.manage(audio_engine);
             
             Ok(())

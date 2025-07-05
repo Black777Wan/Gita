@@ -11,6 +11,7 @@ pub struct Block {
     pub page_title: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    #[serde(default)]
     pub audio_timestamp: Option<AudioTimestamp>,
 }
 
@@ -23,7 +24,7 @@ pub struct CreateBlockRequest {
     pub page_title: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AudioMeta {
     pub recording_id: String,
     pub timestamp: i32,
@@ -40,7 +41,6 @@ pub struct AudioRecording {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AudioTimestamp {
-    pub id: i32,
     pub block_id: String,
     pub recording_id: String,
     pub timestamp_seconds: i32,
