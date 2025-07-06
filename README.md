@@ -16,7 +16,7 @@ Gita is a desktop-first, note-taking application inspired by Roam Research with 
 
 ### Backend (Rust/Tauri)
 - **Audio Engine**: Cross-platform audio recording using `cpal` and `hound`
-- **Database**: PostgreSQL integration with `sqlx`
+- **Database**: Datomic for flexible, graph-based data storage
 - **File Management**: Local audio file storage and management
 - **API**: Tauri commands for frontend-backend communication
 
@@ -27,9 +27,12 @@ Gita is a desktop-first, note-taking application inspired by Roam Research with 
 - **UI Components**: Modern, responsive interface with Tailwind CSS
 
 ### Database Schema
-- **blocks**: Core note/page storage with hierarchical structure
-- **audio_recordings**: Audio file metadata and duration tracking
-- **audio_timestamps**: Links blocks to specific audio timestamps
+
+The application uses Datomic, a flexible, graph-based database. The schema is defined in `src-tauri/src/datomic_schema.rs` and includes the following main entities:
+
+- **Blocks**: The core of the note-taking system. Each block has a unique ID, content, order, and can be part of a page or nested under another block.
+- **Audio Recordings**: Stores metadata about recorded audio files, including the file path and duration.
+- **Audio Timestamps**: Links a specific block to a point in time within an audio recording.
 
 ## Project Structure
 
@@ -38,10 +41,10 @@ gita/
 ├── src-tauri/                 # Rust backend
 │   ├── src/
 │   │   ├── main.rs           # Main Tauri application
-│   │   ├── database.rs       # PostgreSQL operations
+│   │   ├── database.rs       # Datomic operations
 │   │   ├── audio_engine.rs   # Audio recording engine
-│   │   └── models.rs         # Data structures
-│   ├── migrations/           # Database migrations
+│   │   ├── models.rs         # Data structures
+│   │   └── datomic_schema.rs # Datomic schema definition
 │   ├── Cargo.toml           # Rust dependencies
 │   └── tauri.conf.json      # Tauri configuration
 ├── frontend/                 # React frontend
@@ -60,7 +63,7 @@ gita/
 ### System Dependencies
 - **Rust**: Install from [rustup.rs](https://rustup.rs/)
 - **Node.js**: Version 16 or higher
-- **PostgreSQL**: Local PostgreSQL server
+- **Datomic**: A local Datomic dev-pro server is required. You can run it using Docker.
 - **System Libraries** (Linux):
   ```bash
   sudo apt update
@@ -68,14 +71,11 @@ gita/
   ```
 
 ### Database Setup
-1. Install and start PostgreSQL
-2. Create database:
-   ```sql
-   CREATE DATABASE gita_db;
-   CREATE USER gita_user WITH PASSWORD 'your_password';
-   GRANT ALL PRIVILEGES ON DATABASE gita_db TO gita_user;
-   ```
-3. Update database URL in `src-tauri/src/database.rs`
+1.  **Run Datomic Dev-Pro Docker Container**:
+    ```bash
+    docker run -p 8998:8998 -p 8182:8182 --name gita-datomic -d datomic/dev-pro
+    ```
+2.  The application will automatically create the `gita` database and transact the schema on its first run.
 
 ## Installation & Development
 
@@ -146,8 +146,9 @@ The audio engine uses `cpal` for cross-platform audio capture. System audio loop
 - **macOS**: Core Audio with aggregate devices
 - **Linux**: PulseAudio/ALSA loopback
 
-### Database Migrations
-Database schema changes are managed through SQL migration files in `src-tauri/migrations/`. The application automatically runs migrations on startup.
+### Datomic Schema
+
+The Datomic schema is defined in `src-tauri/src/datomic_schema.rs`. The application ensures that the schema is present in the database on startup. If the schema is not found, it is automatically transacted.
 
 ### State Management
 The frontend uses Zustand for state management, providing a simple and efficient way to manage application state across components.
@@ -169,4 +170,3 @@ MIT License - see LICENSE file for details.
 - Inspired by [Roam Research](https://roamresearch.com/)
 - Built on [free-roam](https://github.com/cofinley/free-roam) open-source foundation
 - Powered by [Tauri](https://tauri.app/) for desktop application framework
-
