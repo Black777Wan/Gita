@@ -71,11 +71,12 @@ gita/
   ```
 
 ### Database Setup
-1.  **Run Datomic Dev-Pro Docker Container**:
-    ```bash
-    docker run -p 8998:8998 -p 8182:8182 --name gita-datomic -d datomic/dev-pro
-    ```
-2.  The application will automatically create the `gita` database and transact the schema on its first run.
+1. **Start your local Datomic Pro transactor** by navigating to your Datomic installation directory and running the following command:
+   ```powershell
+   cd C:\Users\yashd\datomic-pro-1.0.7387
+   bin\transactor -Xms1g -Xmx2g config\samples\dev-transactor-template.properties
+   ```
+2. The application will automatically create the `gita` database and transact the schema on its first run.
 
 ## Installation & Development
 
