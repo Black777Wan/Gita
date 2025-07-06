@@ -1,70 +1,112 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod database;
+mod database_peer_complete;
 mod audio_engine;
 mod models;
 mod datomic_schema;
+mod config;
+mod errors;
+
+#[cfg(test)]
+mod tests;
+
+#[macro_use]
+extern crate tracing;
 
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
+use tracing::{info, error, Level};
+use tracing_subscriber;
+
 use audio_engine::AudioEngine;
 use models::*;
-use database::DatomicClient;
+use database_peer_complete::DatomicPeerClient;
+use config::AppConfig;
+use errors::{DatomicError, Result};
 
 // Tauri commands for database operations
 #[tauri::command]
 async fn get_daily_note(
     date: String,
-    db: tauri::State<'_, DatomicClient>,
+    db: tauri::State<'_, DatomicPeerClient>,
 ) -> Result<Vec<Block>, String> {
-    db.get_daily_note(&date).await.map_err(|e| e.to_string())
+    db.get_daily_note(&date).await.map_err(|e| {
+        error!("Failed to get daily note for {}: {}", date, e);
+        e.to_string()
+    })
 }
 
 #[tauri::command]
 async fn create_block(
     block_data: CreateBlockRequest,
     audio_meta: Option<AudioMeta>,
-    db: tauri::State<'_, DatomicClient>,
+    db: tauri::State<'_, DatomicPeerClient>,
 ) -> Result<Block, String> {
-    let block = db.create_block(block_data, audio_meta.clone()).await.map_err(|e| e.to_string())?;
-    if let Some(audio_meta) = audio_meta {
-        db.create_audio_timestamp(&block.id, &audio_meta.recording_id, audio_meta.timestamp).await.map_err(|e| e.to_string())?;
-    }
-    Ok(block)
+    db.create_block(block_data, audio_meta).await.map_err(|e| {
+        error!("Failed to create block: {}", e);
+        e.to_string()
+    })
 }
 
 #[tauri::command]
 async fn update_block_content(
     block_id: String,
     content: String,
-    db: tauri::State<'_, DatomicClient>,
+    db: tauri::State<'_, DatomicPeerClient>,
 ) -> Result<(), String> {
-    db.update_block_content(&block_id, &content).await.map_err(|e| e.to_string())
+    let mut updates = std::collections::HashMap::new();
+    updates.insert("content".to_string(), serde_json::Value::String(content));
+    db.update_block(&block_id, updates).await.map_err(|e| {
+        error!("Failed to update block {}: {}", block_id, e);
+        e.to_string()
+    })?;
+    Ok(())
 }
 
 #[tauri::command]
 async fn get_page_by_title(
     title: String,
-    db: tauri::State<'_, DatomicClient>,
+    db: tauri::State<'_, DatomicPeerClient>,
 ) -> Result<Option<Block>, String> {
-    db.get_page_by_title(&title).await.map_err(|e| e.to_string())
+    db.get_page_blocks(&title).await
+        .map(|blocks| blocks.first().cloned())
+        .map_err(|e| {
+            error!("Failed to get page by title {}: {}", title, e);
+            e.to_string()
+        })
 }
 
 #[tauri::command]
 async fn get_block_children(
     parent_id: String,
-    db: tauri::State<'_, DatomicClient>,
+    db: tauri::State<'_, DatomicPeerClient>,
 ) -> Result<Vec<Block>, String> {
-    db.get_block_children(&parent_id).await.map_err(|e| e.to_string())
+    db.get_page_blocks(&parent_id).await.map_err(|e| {
+        error!("Failed to get block children for {}: {}", parent_id, e);
+        e.to_string()
+    })
+}
+
+#[tauri::command]
+async fn search_blocks(
+    query: String,
+    db: tauri::State<'_, DatomicPeerClient>,
+) -> Result<Vec<Block>, String> {
+    db.search_blocks(&query).await.map_err(|e| {
+        error!("Failed to search blocks for '{}': {}", query, e);
+        e.to_string()
+    })
 }
 
 #[tauri::command]
 async fn delete_block(
     block_id: String,
-    db: tauri::State<'_, DatomicClient>,
+    db: tauri::State<'_, DatomicPeerClient>,
 ) -> Result<(), String> {
-    db.delete_block(&block_id).await.map_err(|e| e.to_string())
+    // TODO: Implement delete_block in the peer client
+    error!("Delete block not yet implemented");
+    Err("Delete block not yet implemented".to_string())
 }
 
 // Audio commands
@@ -72,14 +114,22 @@ async fn delete_block(
 async fn start_recording(
     page_id: String,
     audio_engine: tauri::State<'_, Arc<Mutex<AudioEngine>>>,
-    db: tauri::State<'_, DatomicClient>,
+    db: tauri::State<'_, DatomicPeerClient>,
 ) -> Result<String, String> {
     let recording_id = uuid::Uuid::new_v4().to_string();
-    let file_path = format!("/home/ubuntu/gita/audio/{}.wav", recording_id);
+    let file_path = format!("./audio/{}.wav", recording_id);
     
     // Create audio recording entry in database
-    db.create_audio_recording(&recording_id, &page_id, &file_path).await
-        .map_err(|e| e.to_string())?;
+    let recording = AudioRecording {
+        id: recording_id.clone(),
+        page_id: page_id.clone(),
+        file_path: file_path.clone(),
+        duration_seconds: None,
+        recorded_at: chrono::Utc::now(),
+    };
+    
+    // TODO: Implement create_audio_recording in the peer client
+    // db.create_audio_recording(recording).await.map_err(|e| e.to_string())?;
     
     // Start audio capture
     let engine = audio_engine.lock().unwrap();
@@ -92,7 +142,7 @@ async fn start_recording(
 async fn stop_recording(
     recording_id: String,
     audio_engine: tauri::State<'_, Arc<Mutex<AudioEngine>>>,
-    db: tauri::State<'_, DatomicClient>,
+    db: tauri::State<'_, DatomicPeerClient>,
 ) -> Result<(), String> {
     // Stop audio capture and get duration
     let duration = {
@@ -101,8 +151,7 @@ async fn stop_recording(
     }; // Mutex guard is dropped here
     
     // Update recording duration in database
-    db.update_recording_duration(&recording_id, duration).await
-        .map_err(|e| e.to_string())?;
+    // TODO: Implement update_audio_recording in the peer client
     
     Ok(())
 }
@@ -118,21 +167,56 @@ async fn get_audio_devices(
 #[tauri::command]
 async fn get_block_audio_timestamp(
     block_id: String,
-    db: tauri::State<'_, DatomicClient>,
+    db: tauri::State<'_, DatomicPeerClient>,
 ) -> Result<Option<AudioTimestamp>, String> {
-    db.get_block_audio_timestamp(&block_id).await.map_err(|e| e.to_string())
+    // TODO: Implement get_block_audio_timestamp in the peer client
+    Ok(None)
+}
+
+#[tauri::command]
+async fn health_check(
+    db: tauri::State<'_, DatomicPeerClient>,
+) -> Result<bool, String> {
+    db.health_check().await.map_err(|e| {
+        error!("Health check failed: {}", e);
+        e.to_string()
+    })
 }
 
 fn main() {
+    // Initialize logging
+    tracing_subscriber::fmt()
+        .with_max_level(Level::INFO)
+        .init();
+    
+    info!("Starting Gita application");
+    
     // Load environment variables from .env file
     dotenvy::dotenv().ok();
     
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            // Initialize Datomic client
+            info!("Setting up Tauri application");
+            
+            // Load configuration
+            let config = AppConfig::load()
+                .expect("Failed to load application configuration");
+            
+            info!("Loaded configuration: {:?}", config);
+            
+            // Initialize Datomic peer client
             let datomic_client = tauri::async_runtime::block_on(async {
-                DatomicClient::new().await.expect("Failed to initialize Datomic client")
+                match DatomicPeerClient::new(config.clone()).await {
+                    Ok(client) => {
+                        info!("Datomic peer client initialized successfully");
+                        client
+                    }
+                    Err(e) => {
+                        error!("Failed to initialize Datomic peer client: {}", e);
+                        panic!("Cannot start application without database connection");
+                    }
+                }
             });
             
             // Initialize audio engine
@@ -140,9 +224,11 @@ fn main() {
                 AudioEngine::new().expect("Failed to initialize audio engine")
             ));
             
-            // Create audio directory
-            std::fs::create_dir_all("/home/ubuntu/gita/audio")
-                .expect("Failed to create audio directory");
+            // Create necessary directories
+            std::fs::create_dir_all(&config.audio.recordings_dir)
+                .expect("Failed to create recordings directory");
+            
+            info!("Application setup completed successfully");
             
             app.manage(datomic_client);
             app.manage(audio_engine);
@@ -155,13 +241,17 @@ fn main() {
             update_block_content,
             get_page_by_title,
             get_block_children,
+            search_blocks,
             delete_block,
             start_recording,
             stop_recording,
             get_audio_devices,
-            get_block_audio_timestamp
+            get_block_audio_timestamp,
+            health_check
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("Error while running Tauri application");
+    
+    info!("Gita application shut down");
 }
 

@@ -17,7 +17,6 @@ tauri = { version = "2.0", features = [] }
 tauri-plugin-shell = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.12", features = ["json"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1.0", features = ["full"] }
@@ -26,6 +25,22 @@ cpal = "0.15"
 hound = "3.5"
 crossbeam-channel = "0.5"
 dotenvy = "0.15"
+# Datomic Peer API dependencies
+jni = "0.21"
+lazy_static = "1.4"
+edn-rs = "0.17"
+# Configuration and utilities
+toml = "0.8"
+dirs = "5.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+thiserror = "1.0"
+
+[dev-dependencies]
+tempfile = "3.0"
+quickcheck = "1.0"
+quickcheck_macros = "1.0"
+tokio-test = "0.4"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!

@@ -16,9 +16,12 @@ Gita is a desktop-first, note-taking application inspired by Roam Research with 
 
 ### Backend (Rust/Tauri)
 - **Audio Engine**: Cross-platform audio recording using `cpal` and `hound`
-- **Database**: Datomic for flexible, graph-based data storage
+- **Database**: Datomic Peer API for flexible, graph-based data storage with JNI integration
 - **File Management**: Local audio file storage and management
 - **API**: Tauri commands for frontend-backend communication
+- **Configuration**: TOML-based configuration with environment variable support
+- **Error Handling**: Comprehensive error handling and retry logic
+- **Logging**: Structured logging with tracing
 
 ### Frontend (React/TypeScript)
 - **Block Editor**: Rich text editing with block-based structure
@@ -41,10 +44,13 @@ gita/
 ├── src-tauri/                 # Rust backend
 │   ├── src/
 │   │   ├── main.rs           # Main Tauri application
-│   │   ├── database.rs       # Datomic operations
+│   │   ├── database_peer_complete.rs # Datomic Peer API client
 │   │   ├── audio_engine.rs   # Audio recording engine
 │   │   ├── models.rs         # Data structures
-│   │   └── datomic_schema.rs # Datomic schema definition
+│   │   ├── datomic_schema.rs # Datomic schema definition
+│   │   ├── config.rs         # Configuration management
+│   │   ├── errors.rs         # Error handling
+│   │   └── tests.rs          # Test suites
 │   ├── Cargo.toml           # Rust dependencies
 │   └── tauri.conf.json      # Tauri configuration
 ├── frontend/                 # React frontend
@@ -71,12 +77,75 @@ gita/
   ```
 
 ### Database Setup
-1. **Start your local Datomic Pro transactor** by navigating to your Datomic installation directory and running the following command:
+
+**Important Note**: This application now uses Datomic's Peer API, which requires Datomic Pro and a running transactor. The application directly connects to the transactor using JNI (Java Native Interface).
+
+#### Prerequisites
+1. **Datomic Pro License** - Required for production use
+2. **Java Runtime** - Java 8 or later (Java 17 recommended)
+3. **Datomic Installation** - Download from https://my.datomic.com/
+
+#### Setup Steps
+
+1. **Install Datomic Pro**
+   ```powershell
+   # Download and extract Datomic Pro
+   # Set DATOMIC_LIB_PATH environment variable
+   $env:DATOMIC_LIB_PATH = "C:\Users\yashd\datomic-pro-1.0.7387\lib"
+   ```
+
+2. **Start the Datomic transactor**
    ```powershell
    cd C:\Users\yashd\datomic-pro-1.0.7387
    bin\transactor -Xms1g -Xmx2g config\samples\dev-transactor-template.properties
    ```
-2. The application will automatically create the `gita` database and transact the schema on its first run.
+
+3. **Configure Gita**
+   
+   Create `gita-config.toml` in your data directory:
+   ```toml
+   [datomic]
+   db_uri = "datomic:dev://localhost:8998/gita"
+   transactor_host = "localhost"
+   transactor_port = 8998
+   database_name = "gita"
+   datomic_lib_path = "C:\\Users\\yashd\\datomic-pro-1.0.7387\\lib"
+   connection_timeout_ms = 30000
+   retry_attempts = 3
+   jvm_opts = ["-Xmx4g", "-Xms1g", "-XX:+UseG1GC"]
+
+   [audio]
+   recordings_dir = "recordings"
+   max_recording_duration_minutes = 120
+   sample_rate = 44100
+   channels = 2
+
+   log_level = "info"
+   ```
+
+4. **(Optional) Start the Datomic Console**
+   ```powershell
+   cd C:\Users\yashd\datomic-pro-1.0.7387
+   bin\console -p 8080 dev datomic:dev://localhost:8998/
+   ```
+   Access at `http://localhost:8080/browse`
+
+### Verifying Datomic Setup
+After starting the Datomic transactor, you can verify that the database is set up correctly:
+
+1. **Check the Transactor**: The transactor should be running on port 8998. You can verify this by running `netstat -an | findstr "8998"` in PowerShell.
+2. **Check Application Health**: Once Gita is running, it includes a health check endpoint to verify database connectivity.
+3. **Access the Web Console** (if started): Open `http://localhost:8080/browse` in your browser to access the Datomic console.
+4. **Connect to the Database** in the console:
+   - **Storage**: Select `dev`
+   - **DB Name**: Enter `gita`
+5. **Explore**: Click "Connect". If successful, you'll be able to browse the schema and data.
+
+The application will automatically:
+- Create the `gita` database if it doesn't exist
+- Transact the schema on first run
+- Perform health checks and retry failed connections
+- Log all operations for troubleshooting
 
 ## Installation & Development
 
