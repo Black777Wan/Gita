@@ -98,9 +98,9 @@ impl AudioEngine {
         let (stop_sender, stop_receiver) = mpsc::channel::<()>();
 
         // Start the audio writer thread
-        let file_path = file_path.to_string();
+        let file_path_clone = file_path.to_string();
         let writer_thread = thread::spawn(move || {
-            Self::audio_writer_thread(receiver, &file_path);
+            Self::audio_writer_thread(receiver, &file_path_clone);
         });
 
         // Create a new host for the audio thread instead of cloning

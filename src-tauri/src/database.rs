@@ -1,6 +1,7 @@
 use sqlx::PgPool;
 use anyhow::Result;
 use chrono::Utc;
+use uuid::Uuid;
 use crate::models::*;
 
 pub struct Database {
@@ -50,11 +51,14 @@ impl Database {
         block_data: CreateBlockRequest,
         audio_meta: Option<AudioMeta>,
     ) -> Result<Block> {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = Uuid::new_v4();
+        let parent_id = match block_data.parent_id {
+            Some(pid) => Some(Uuid::parse_str(&pid)?),
+            None => None,
+        };
         let now = Utc::now();
 
-        let block = sqlx::query_as!(
-            Block,
+        let block = sqlx::query!(
             r#"
             INSERT INTO blocks (id, content, parent_id, "order", is_page, page_title, created_at, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -62,7 +66,7 @@ impl Database {
             "#,
             id,
             block_data.content,
-            block_data.parent_id,
+            parent_id,
             block_data.order,
             block_data.is_page,
             block_data.page_title,
@@ -72,13 +76,15 @@ impl Database {
         .fetch_one(&self.pool)
         .await?;
 
+        let id_str = id.to_string();
+
         // If audio metadata is provided, create the timestamp link
         if let Some(audio_meta) = audio_meta {
-            self.create_audio_timestamp(&id, &audio_meta.recording_id, audio_meta.timestamp).await?;
+            self.create_audio_timestamp(&id_str, &audio_meta.recording_id, audio_meta.timestamp).await?;
         }
 
         // Fetch the block with audio timestamp if it exists
-        self.get_block_with_audio_timestamp(&id).await
+        self.get_block_with_audio_timestamp(&id_str).await
     }
 
     pub async fn update_block_content(&self, block_id: &str, content: &str) -> Result<()> {
