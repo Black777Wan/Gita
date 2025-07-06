@@ -1,0 +1,7 @@
+- [x] Examine the error message from `cargo tauri dev`
+- [x] Inspect the Datomic Pro setup
+- [x] Configure Datomic transactor to run on port 8998
+- [ ] Start Datomic transactor
+- [ ] Re-run `cargo tauri dev`
+- [ ] Analyze the Gita project for Datomic Pro integration
+- [ ] Formulate a solution to the error
