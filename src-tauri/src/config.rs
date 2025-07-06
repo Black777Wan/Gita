@@ -128,30 +128,52 @@ impl AppConfig {
     
     /// Auto-detect Datomic installation path
     fn detect_datomic_installation() -> Option<PathBuf> {
-        // Common installation paths
-        let common_paths = vec![
-            PathBuf::from("C:\\Users\\yashd\\datomic-pro-1.0.7387\\lib"),
-            PathBuf::from("C:\\datomic-pro\\lib"),
-            PathBuf::from("/usr/local/datomic-pro/lib"),
-            PathBuf::from("/opt/datomic-pro/lib"),
-            PathBuf::from(env::var("HOME").unwrap_or_default()).join("datomic-pro/lib"),
-        ];
-        
+        // Helper closure to check a potential root path
+        let check_path = |path: PathBuf| -> Option<PathBuf> {
+            if path.exists() {
+                let has_main_jar = path.read_dir().map_or(false, |mut entries| {
+                    entries.any(|entry| {
+                        if let Ok(entry) = entry {
+                            let file_name = entry.file_name();
+                            let name = file_name.to_string_lossy();
+                            (name.starts_with("datomic") || name.starts_with("peer")) && name.ends_with(".jar")
+                        } else {
+                            false
+                        }
+                    })
+                });
+
+                let lib_dir = path.join("lib");
+                if has_main_jar && lib_dir.exists() {
+                    return Some(lib_dir);
+                }
+            }
+            None
+        };
+
         // Check if DATOMIC_HOME is set
         if let Ok(datomic_home) = env::var("DATOMIC_HOME") {
-            let lib_path = PathBuf::from(datomic_home).join("lib");
-            if lib_path.exists() {
-                return Some(lib_path);
-            }
-        }
-        
-        // Check common paths
-        for path in common_paths {
-            if path.exists() && path.join("datomic-pro.jar").exists() {
+            if let Some(path) = check_path(PathBuf::from(datomic_home)) {
                 return Some(path);
             }
         }
-        
+
+        // Common installation paths - now pointing to root directories
+        let common_paths = vec![
+            PathBuf::from("C:\\Users\\yashd\\datomic-pro-1.0.7387"),
+            PathBuf::from("C:\\datomic-pro"),
+            PathBuf::from("/usr/local/datomic-pro"),
+            PathBuf::from("/opt/datomic-pro"),
+            PathBuf::from(env::var("HOME").unwrap_or_default()).join("datomic-pro"),
+        ];
+
+        // Check common paths
+        for path in common_paths {
+            if let Some(p) = check_path(path) {
+                return Some(p);
+            }
+        }
+
         None
     }
     

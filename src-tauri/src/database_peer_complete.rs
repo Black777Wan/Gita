@@ -84,28 +84,50 @@ impl DatomicPeerClient {
 
             // Inline the logic from AppConfig::get_datomic_classpath
             let classpath_result: anyhow::Result<String> = (|| {
-                let lib_path = datomic_config.datomic_lib_path.as_ref()
+                // Resolve the installation root and lib directory, even if user points to 'lib'
+                let configured = datomic_config.datomic_lib_path.as_ref()
                     .ok_or_else(|| anyhow!("Datomic lib path not configured in DatomicConfig."))?;
-
-                if !lib_path.exists() {
-                    return Err(anyhow!("Datomic lib path does not exist: {}", lib_path.display()));
+                if !configured.exists() {
+                    return Err(anyhow!("Configured Datomic path does not exist: {}", configured.display()));
                 }
-                
+                // Determine install root: parent of 'lib' if pointed at lib, otherwise the path itself
+                let install_root = if configured.file_name().and_then(|s| s.to_str()) == Some("lib") {
+                    configured.parent().unwrap_or(configured).to_path_buf()
+                } else {
+                    configured.clone()
+                };
+                if !install_root.exists() {
+                    return Err(anyhow!("Datomic install root does not exist: {}", install_root.display()));
+                }
                 let mut classpath_entries = Vec::new();
-                for entry in std::fs::read_dir(lib_path)
-                    .map_err(|e| anyhow!("Failed to read Datomic lib directory: {}", e))? {
+                // Scan install root for main JARs
+                debug!("Scanning install root for JARs: {}", install_root.display());
+                for entry in std::fs::read_dir(&install_root)
+                    .map_err(|e| anyhow!("Failed to read install root directory: {}", e))? {
                     let entry = entry.map_err(|e| anyhow!("Error reading directory entry: {}", e))?;
                     let path = entry.path();
-
                     if path.extension().and_then(|s| s.to_str()) == Some("jar") {
+                        debug!("Adding main JAR: {}", path.display());
                         classpath_entries.push(path.to_string_lossy().to_string());
                     }
                 }
-                
-                if classpath_entries.is_empty() {
-                    return Err(anyhow!("No JAR files found in Datomic lib path: {}", lib_path.display()));
+                // Scan lib subdirectory for dependencies
+                let lib_dir = install_root.join("lib");
+                if lib_dir.exists() {
+                    debug!("Scanning dependencies in lib: {}", lib_dir.display());
+                    for entry in std::fs::read_dir(&lib_dir)
+                        .map_err(|e| anyhow!("Failed to read lib directory: {}", e))? {
+                        let entry = entry.map_err(|e| anyhow!("Error reading directory entry: {}", e))?;
+                        let path = entry.path();
+                        if path.extension().and_then(|s| s.to_str()) == Some("jar") {
+                            debug!("Adding dependency JAR: {}", path.display());
+                            classpath_entries.push(path.to_string_lossy().to_string());
+                        }
+                    }
                 }
-                
+                if classpath_entries.is_empty() {
+                    return Err(anyhow!("No JAR files found in Datomic installation: {}", install_root.display()));
+                }
                 Ok(classpath_entries.join(if cfg!(windows) { ";" } else { ":" }))
             })();
 

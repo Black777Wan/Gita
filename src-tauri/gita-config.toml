@@ -1,0 +1,18 @@
+log_level = "debug"
+data_dir = "C:\\Users\\yashd\\AppData\\Roaming\\gita"
+
+[datomic]
+db_uri = "datomic:dev://localhost:8998/gita"
+transactor_host = "localhost"
+transactor_port = 8998
+database_name = "gita"
+datomic_lib_path = "C:\\Users\\yashd\\datomic-pro-1.0.7387"
+jvm_opts = ["-Xmx4g", "-Xms1g", "-XX:+UseG1GC"]
+connection_timeout_ms = 30000
+retry_attempts = 3
+
+[audio]
+recordings_dir = "C:\\Users\\yashd\\AppData\\Roaming\\gita\\recordings"
+max_recording_duration_minutes = 120
+sample_rate = 44100
+channels = 2
