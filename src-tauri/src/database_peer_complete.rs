@@ -1,10 +1,10 @@
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Once}; // Removed Mutex
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+// Removed Duration, Instant from std::time
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
+use chrono::Utc; // Removed DateTime
 use serde_json::{json, Value};
-use tokio::time::timeout;
+// Removed tokio::time::timeout
 use tracing::{info, warn, error, debug, instrument};
 
 use crate::models::*;
@@ -13,8 +13,11 @@ use crate::config::{AppConfig, DatomicConfig};
 use crate::errors::{DatomicError, Result, RetryConfig, with_retry};
 
 use jni::{JNIEnv, JavaVM, InitArgsBuilder, JNIVersion};
-use jni::objects::{JClass, JObject, JString, JValue, JList, JMap};
-use jni::sys::{jvalue, jobject, jlong};
+// JList, JMap confirmed unused. jlong confirmed unused.
+// JClass, JString, JObject, JValue are used.
+// jvalue is used via jni::sys::jvalue. jobject might be implicitly.
+use jni::objects::{JClass, JObject, JString, JValue, JStaticMethodID}; // Added JStaticMethodID
+use jni::sys::{jvalue}; // Removed jobject, jlong. jobject might not be needed as direct import.
 
 // Global JVM instance
 static mut JVM: Option<Arc<JavaVM>> = None;
@@ -145,7 +148,7 @@ impl DatomicPeerClient {
         let jvm = self.jvm.clone();
         
         let operation = move || -> Result<bool> {
-            let env = jvm.attach_current_thread()
+            let mut env = jvm.attach_current_thread() // Made env mutable
                 .map_err(DatomicError::from)?;
             
             // Get Peer class
@@ -154,7 +157,7 @@ impl DatomicPeerClient {
             
             // Get createDatabase method
             let create_db_method = env.get_static_method_id(
-                peer_class,
+                &peer_class, // Pass JClass by reference
                 "createDatabase",
                 "(Ljava/lang/String;)Z"
             ).map_err(|e| DatomicError::java_method_not_found(format!("createDatabase: {}", e)))?;
@@ -164,16 +167,21 @@ impl DatomicPeerClient {
                 .map_err(DatomicError::from)?;
             
             let uri_jobject: JObject = uri_string.into();
-            let method_args = [JValue::Object(uri_jobject)];
-            let result = unsafe { env.call_static_method_unchecked(
-                peer_class,
-                create_db_method,
-                jni::signature::ReturnType::Primitive(jni::signature::Primitive::Boolean),
-                &method_args
-            ).map_err(DatomicError::from)? };
+            // Error E0308: Pass JObject by reference
+            // Error E0308: Convert JValue to raw jvalue for the call
+            let method_args_raw = [jni::sys::jvalue { l: uri_jobject.as_raw() }];
+            let result_jvalue = unsafe {
+                env.call_static_method_unchecked::<JClass, JStaticMethodID>(
+                    peer_class, // Pass original JClass (consumed by Into<JObject>)
+                    create_db_method,
+                    jni::signature::ReturnType::Primitive(jni::signature::Primitive::Boolean),
+                    &method_args_raw
+                )
+            }.map_err(DatomicError::from)?; // Semicolon moved after ?
             
-            match result {
-                JValue::Bool(created) => Ok(created != 0),
+            // Error E0308: Ensure match is against the correct JValue type
+            match result_jvalue.z() { // .z() for boolean
+                Ok(created) => Ok(created),
                 _ => Err(DatomicError::type_conversion_error("Expected boolean from createDatabase")),
             }
         };
@@ -225,17 +233,26 @@ impl DatomicPeerClient {
         let jvm = self.jvm.clone();
         
         let operation = move || -> Result<()> {
-            let env = jvm.attach_current_thread()
+            let mut env = jvm.attach_current_thread() // Make env mutable
                 .map_err(DatomicError::from)?;
             
-            // Get connection
-            let conn = Self::get_connection_jni(&env, &db_uri)?;
+            // --- Inlined get_connection_jni ---
+            let peer_class_for_conn = env.find_class("datomic/Peer")?;
+            let connect_method = env.get_static_method_id(&peer_class_for_conn, "connect", "(Ljava/lang/String;)Ldatomic/Connection;")?;
+            let uri_string_for_conn = env.new_string(&db_uri)?;
+            let uri_jobject_for_conn: JObject = uri_string_for_conn.into();
+            let conn_args_raw = [jni::sys::jvalue { l: uri_jobject_for_conn.as_raw() }];
+            let conn_jvalue = unsafe {
+                env.call_static_method_unchecked::<JClass, JStaticMethodID>(peer_class_for_conn, connect_method, jni::signature::ReturnType::Object, &conn_args_raw)
+            }?;
+            let conn = conn_jvalue.l()?; // conn is JObject
+            // --- End Inlined get_connection_jni ---
             
             // Parse schema EDN
-            let schema_reader = env.find_class("java/io/StringReader")
+            let schema_reader_class = env.find_class("java/io/StringReader") // Renamed for clarity
                 .map_err(DatomicError::from)?;
-            let schema_reader_init = env.get_method_id(
-                schema_reader,
+            let schema_reader_init_mid = env.get_method_id( // Renamed for clarity
+                &schema_reader_class, // Pass JClass by reference
                 "<init>",
                 "(Ljava/lang/String;)V"
             ).map_err(DatomicError::from)?;
@@ -244,64 +261,85 @@ impl DatomicPeerClient {
             let schema_string = env.new_string(&schema_json_string)
                 .map_err(DatomicError::from)?;
             let schema_jobject: JObject = schema_string.into();
-            let method_args_new_object: [JValue; 1] = [JValue::Object(schema_jobject)];
-            let reader_obj = env.new_object(
-                schema_reader,
-                schema_reader_init,
-                &method_args_new_object
-            ).map_err(DatomicError::from)?;
+            // Error E0308: Pass JObject by reference for JValue::Object
+            // This will be passed to new_object which takes &[JValue]
+            let method_args_jvalue_slice = [JValue::Object(&schema_jobject)];
+            // Convert JValue slice to raw jni::sys::jvalue slice for _unchecked call
+            let method_args_raw_for_new_object: Vec<jni::sys::jvalue> = method_args_jvalue_slice
+                .iter()
+                .map(|v| v.as_jni())
+                .collect();
+
+            // Use new_object_unchecked as we have the JMethodID.
+            // Pass the original schema_reader_class (it will be consumed here).
+            let reader_obj = unsafe {
+                env.new_object_unchecked(
+                    schema_reader_class,
+                    schema_reader_init_mid,
+                    &method_args_raw_for_new_object
+                )
+            }.map_err(DatomicError::from)?;
             
             // Parse using EDN reader
-            let util_class = env.find_class("datomic/Util")
+            let util_class_orig = env.find_class("datomic/Util") // Renamed to avoid confusion
                 .map_err(DatomicError::from)?;
             let read_all_method = env.get_static_method_id(
-                util_class,
+                &util_class_orig, // Pass JClass by reference
                 "readAll",
                 "(Ljava/io/Reader;)Ljava/util/List;"
             ).map_err(DatomicError::from)?;
             
-            let method_args_read_all = [JValue::Object(reader_obj)];
-            let tx_data = unsafe { env.call_static_method_unchecked(
-                util_class,
-                read_all_method,
-                jni::signature::ReturnType::Object,
-                &method_args_read_all
-            ).map_err(DatomicError::from)? };
+            // Error E0308: Pass JObject by reference and convert to raw jvalue
+            let method_args_read_all_raw = [jni::sys::jvalue { l: reader_obj.as_raw() }];
+            let tx_data_jvalue = unsafe {
+                env.call_static_method_unchecked::<JClass, JStaticMethodID>(
+                    util_class_orig, // Pass original JClass (consumed)
+                    read_all_method,
+                    jni::signature::ReturnType::Object,
+                    &method_args_read_all_raw
+                )
+            }.map_err(DatomicError::from)?;
             
             // Transact
             let connection_class = env.get_object_class(&conn) // Borrow conn
                 .map_err(DatomicError::from)?;
             let transact_method = env.get_method_id(
-                connection_class,
+                &connection_class, // Pass JClass by reference
                 "transact",
                 "(Ljava/util/List;)Ljava/util/concurrent/Future;"
             ).map_err(DatomicError::from)?;
             
-            let tx_data_obj = tx_data.l()?;
-            let method_args_transact = [JValue::Object(tx_data_obj)];
-            let future = unsafe { env.call_method_unchecked(
-                &conn, // Borrow conn
-                transact_method,
-                jni::signature::ReturnType::Object,
-                &method_args_transact
-            ).map_err(DatomicError::from)? };
+            let tx_data_obj = tx_data_jvalue.l()?; // This is JObject
+            // Error E0308: Pass JObject by reference and convert to raw jvalue
+            let method_args_transact_raw = [jni::sys::jvalue { l: tx_data_obj.as_raw() }];
+            let future_jvalue = unsafe {
+                env.call_method_unchecked(
+                    &conn, // Borrow conn
+                    transact_method,
+                    jni::signature::ReturnType::Object,
+                    &method_args_transact_raw
+                )
+            }.map_err(DatomicError::from)?;
             
             // Wait for result
-            let future_obj = future.l()?;
+            let future_obj = future_jvalue.l()?; // Corrected to use future_jvalue
             let future_class = env.get_object_class(&future_obj) // Borrow future_obj
                 .map_err(DatomicError::from)?;
             let get_method = env.get_method_id(
-                future_class,
+                &future_class, // Pass JClass by reference
                 "get",
                 "()Ljava/lang/Object;"
             ).map_err(DatomicError::from)?;
             
-            let _result = unsafe { env.call_method_unchecked(
-                &future_obj, // Borrow future_obj
-                get_method,
-                jni::signature::ReturnType::Object,
-                &[]
-            ).map_err(DatomicError::from)? };
+            let _result_jvalue = unsafe {
+                env.call_method_unchecked(
+                    &future_obj, // Borrow future_obj
+                    get_method,
+                    jni::signature::ReturnType::Object,
+                    &[]
+                )
+            }.map_err(DatomicError::from)?;
+            // _result_jvalue is not used, but the call and error handling are preserved.
             
             Ok(())
         };
@@ -310,35 +348,12 @@ impl DatomicPeerClient {
         Ok(())
     }
 
-    /// Get a connection to the database
-    fn get_connection_jni<'a>(env: &'a JNIEnv, db_uri: &str) -> Result<JObject<'a>> {
-        let peer_class = env.find_class("datomic/Peer")
-            .map_err(DatomicError::from)?;
-        
-        let connect_method = env.get_static_method_id(
-            peer_class,
-            "connect",
-            "(Ljava/lang/String;)Ldatomic/Connection;"
-        ).map_err(DatomicError::from)?;
-        
-        let uri_string = env.new_string(db_uri)
-            .map_err(DatomicError::from)?;
-        
-        let uri_jobject: JObject = uri_string.into();
-        let method_args = [JValue::from(uri_jobject)];
-        let connection = unsafe { env.call_static_method_unchecked(
-            peer_class,
-            connect_method,
-            jni::signature::ReturnType::Object,
-            &method_args
-        ).map_err(DatomicError::from)? };
-        
-        Ok(connection.l()?)
-    }
+    // fn get_connection_jni ... (Removed as it's inlined)
+    // fn get_database_jni ... (Removed as it's inlined)
 
     /// Execute a query against the database
-    #[instrument(skip(self, params))]
-    pub async fn query(&self, query: &str, params: Vec<Value>) -> Result<Vec<HashMap<String, Value>>> {
+    #[instrument(skip(self, _params))] // Changed params to _params
+    pub async fn query(&self, query: &str, _params: Vec<Value>) -> Result<Vec<HashMap<String, Value>>> { // Prefixed params
         debug!("Executing query: {}", query);
         
         let query_str = query.to_string();
@@ -346,36 +361,54 @@ impl DatomicPeerClient {
         let jvm = self.jvm.clone();
         
         let operation = move || -> Result<Vec<HashMap<String, Value>>> {
-            let env = jvm.attach_current_thread()
-                .map_err(DatomicError::from)?;
+            let mut env = jvm.attach_current_thread().map_err(DatomicError::from)?;
             
-            // Get connection and database
-            let conn = Self::get_connection_jni(&env, &db_uri)?;
-            let db = Self::get_database_jni(&env, conn)?;
+            // --- Inlined get_connection_jni ---
+            let peer_class_for_conn = env.find_class("datomic/Peer")?;
+            let connect_method = env.get_static_method_id(&peer_class_for_conn, "connect", "(Ljava/lang/String;)Ldatomic/Connection;")?;
+            let uri_string_for_conn = env.new_string(&db_uri)?;
+            let uri_jobject_for_conn: JObject = uri_string_for_conn.into();
+            let conn_args_raw = [jni::sys::jvalue { l: uri_jobject_for_conn.as_raw() }];
+            let conn_jvalue = unsafe {
+                env.call_static_method_unchecked::<JClass, JStaticMethodID>(peer_class_for_conn, connect_method, jni::signature::ReturnType::Object, &conn_args_raw)
+            }?;
+            let conn_obj = conn_jvalue.l()?;
+            // --- End Inlined get_connection_jni ---
+
+            // --- Inlined get_database_jni ---
+            let connection_class_for_db = env.get_object_class(&conn_obj)?;
+            let db_method = env.get_method_id(connection_class_for_db, "db", "()Ldatomic/Database;")?;
+            let db_jvalue = unsafe {
+                env.call_method_unchecked(&conn_obj, db_method, jni::signature::ReturnType::Object, &[])
+            }?;
+            let db_obj = db_jvalue.l()?;
+            // --- End Inlined get_database_jni ---
             
-            // Execute query
-            let peer_class = env.find_class("datomic/Peer")
-                .map_err(DatomicError::from)?;
+            // Execute query (using db_obj)
+            let peer_class_for_query = env.find_class("datomic/Peer")?;
             let query_method = env.get_static_method_id(
-                peer_class,
+                &peer_class_for_query, // Pass JClass by reference
                 "query",
                 "(Ljava/lang/String;Ldatomic/Database;)Ljava/util/Collection;"
-            ).map_err(DatomicError::from)?;
+            )?;
             
-            let query_string = env.new_string(&query_str)
-                .map_err(DatomicError::from)?;
+            let query_jstring = env.new_string(&query_str)?;
+            let query_jobject: JObject = query_jstring.into();
             
-            let query_jobject: JObject = query_string.into();
-            let method_args = [JValue::from(query_jobject), JValue::from(db)];
-            let result = unsafe { env.call_static_method_unchecked(
-                peer_class,
-                query_method,
-                jni::signature::ReturnType::Object,
-                &method_args
-            ).map_err(DatomicError::from)? };
+            let method_args_raw = [
+                jni::sys::jvalue { l: query_jobject.as_raw() },
+                jni::sys::jvalue { l: db_obj.as_raw() }, // Use inlined db_obj
+            ];
+            let result_jvalue = unsafe {
+                env.call_static_method_unchecked::<JClass, JStaticMethodID>(
+                    peer_class_for_query, // Pass original JClass (consumed)
+                    query_method,
+                    jni::signature::ReturnType::Object,
+                    &method_args_raw
+                )
+            }?;
             
-            // Convert result to Rust data structures
-            Self::convert_query_result(&env, result.l()?)
+            Self::convert_query_result(&mut env, result_jvalue.l()?)
         };
         
         let results = with_retry(operation, &self.retry_config, "query").await?;
@@ -383,31 +416,14 @@ impl DatomicPeerClient {
         Ok(results)
     }
 
-    /// Get database from connection
-    fn get_database_jni<'a>(env: &'a JNIEnv, conn: JObject<'a>) -> Result<JObject<'a>> {
-        let connection_class = env.get_object_class(&conn) // Borrow conn
-            .map_err(DatomicError::from)?;
-        let db_method = env.get_method_id(
-            connection_class,
-            "db",
-            "()Ldatomic/Database;"
-        ).map_err(DatomicError::from)?;
-        
-        let db = unsafe { env.call_method_unchecked(
-            &conn, // Borrow conn
-            db_method,
-            jni::signature::ReturnType::Object,
-            &[]
-        ).map_err(DatomicError::from)? };
-        
-        Ok(db.l()?)
-    }
+    // fn get_database_jni ... (Removed as it's inlined earlier, this is just deleting the definition)
 
     /// Convert Java query result to Rust data structures
-    fn convert_query_result(env: &JNIEnv, result: JObject) -> Result<Vec<HashMap<String, Value>>> {
+    // Changed to take &mut JNIEnv for consistency if JNI calls are added later.
+    fn convert_query_result(_env: &mut JNIEnv, _result: JObject) -> Result<Vec<HashMap<String, Value>>> {
         // This is a simplified conversion - in a real implementation,
         // you'd need to handle the complex nested structure of Datomic results
-        let mut results = Vec::new();
+        let results = Vec::new(); // Removed mut
         
         // For now, return empty results
         // TODO: Implement proper result conversion
@@ -551,8 +567,8 @@ impl DatomicPeerClient {
         let results = self.query(query, params).await?;
         
         // Convert results to blocks
-        let mut blocks = Vec::new();
-        for result in results {
+        let blocks = Vec::new(); // Removed mut
+        for _result in results { // Prefixed with underscore
             // TODO: Implement proper result conversion
             // This is a placeholder
         }
@@ -592,8 +608,8 @@ impl DatomicPeerClient {
         let results = self.query(query, params).await?;
         
         // Convert results to blocks
-        let mut blocks = Vec::new();
-        for result in results {
+        let blocks = Vec::new(); // Removed mut
+        for _result in results { // Prefixed with underscore
             // TODO: Implement proper result conversion
             // This is a placeholder
         }

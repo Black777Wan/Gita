@@ -219,7 +219,7 @@ where
         }
     }
     
-    if let Some(e) = last_error {
+    if let Some(_e) = last_error { // Prefixed e with underscore
         Err(DatomicError::RetryLimitExceeded {
             attempts: config.max_attempts,
         })
