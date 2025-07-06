@@ -23,7 +23,8 @@ use audio_engine::AudioEngine;
 use models::*;
 use database_peer_complete::DatomicPeerClient;
 use config::AppConfig;
-use errors::{DatomicError, Result};
+// Removed DatomicError, Result as they are not directly used in this file
+// use errors::{DatomicError, Result};
 
 // Tauri commands for database operations
 #[tauri::command]
@@ -102,7 +103,7 @@ async fn search_blocks(
 #[tauri::command]
 async fn delete_block(
     block_id: String,
-    db: tauri::State<'_, DatomicPeerClient>,
+    _db: tauri::State<'_, DatomicPeerClient>, // Prefixed with underscore
 ) -> std::result::Result<(), String> {
     // TODO: Implement delete_block in the peer client
     error!("Delete block not yet implemented for block_id: {}", block_id);
@@ -114,7 +115,7 @@ async fn delete_block(
 async fn start_recording(
     page_id: String,
     audio_engine: tauri::State<'_, Arc<Mutex<AudioEngine>>>,
-    db: tauri::State<'_, DatomicPeerClient>,
+    _db: tauri::State<'_, DatomicPeerClient>, // Prefixed with underscore
 ) -> std::result::Result<String, String> {
     let recording_id = uuid::Uuid::new_v4().to_string();
     let file_path = format!("./audio/{}.wav", recording_id);
@@ -142,7 +143,7 @@ async fn start_recording(
 async fn stop_recording(
     recording_id: String,
     audio_engine: tauri::State<'_, Arc<Mutex<AudioEngine>>>,
-    db: tauri::State<'_, DatomicPeerClient>,
+    _db: tauri::State<'_, DatomicPeerClient>, // Prefixed with underscore
 ) -> std::result::Result<(), String> {
     // Stop audio capture and get duration
     let _duration = { // Underscore to silence unused warning for now
@@ -167,7 +168,7 @@ async fn get_audio_devices(
 #[tauri::command]
 async fn get_block_audio_timestamp(
     block_id: String,
-    db: tauri::State<'_, DatomicPeerClient>,
+    _db: tauri::State<'_, DatomicPeerClient>, // Prefixed with underscore
 ) -> std::result::Result<Option<AudioTimestamp>, String> {
     // TODO: Implement get_block_audio_timestamp in the peer client
     info!("get_block_audio_timestamp called for: {}", block_id);
