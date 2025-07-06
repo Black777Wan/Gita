@@ -11,8 +11,7 @@ mod errors;
 #[cfg(test)]
 mod tests;
 
-#[macro_use]
-extern crate tracing;
+extern crate tracing; // Removed #[macro_use]
 
 use std::sync::{Arc, Mutex};
 use tauri::Manager;

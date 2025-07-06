@@ -1,5 +1,7 @@
-use std::sync::{Arc, Once}; // Removed Mutex
+use std::sync::Arc;
+use once_cell::sync::OnceCell; // Added for safer static JVM initialization
 use std::collections::HashMap;
+use anyhow::anyhow; // Moved here - Required for the inlined classpath logic
 // Removed Duration, Instant from std::time
 use uuid::Uuid;
 use chrono::Utc; // Removed DateTime
@@ -14,14 +16,12 @@ use crate::errors::{DatomicError, Result, RetryConfig, with_retry};
 
 use jni::{JNIEnv, JavaVM, InitArgsBuilder, JNIVersion};
 // JList, JMap confirmed unused. jlong confirmed unused.
-// JClass, JString, JObject, JValue are used.
-// jvalue is used via jni::sys::jvalue. jobject might be implicitly.
-use jni::objects::{JClass, JObject, JString, JValue, JStaticMethodID}; // Added JStaticMethodID
-use jni::sys::{jvalue}; // Removed jobject, jlong. jobject might not be needed as direct import.
+// JClass, JObject, JValue, JStaticMethodID are used.
+use jni::objects::{JClass, JObject, JValue, JStaticMethodID};
+// Removed jni::sys::{jvalue} import, as it's used via jni::sys::jvalue directly
 
-// Global JVM instance
-static mut JVM: Option<Arc<JavaVM>> = None;
-static JVM_INIT: Once = Once::new();
+// Global JVM instance using OnceCell for thread-safe initialization
+static JVM: OnceCell<Arc<JavaVM>> = OnceCell::new();
 
 /// Production-ready Datomic Peer API client
 pub struct DatomicPeerClient {
@@ -51,14 +51,15 @@ pub struct DatomicPeerClient {
 impl DatomicPeerClient {
     /// Create a new production-ready Datomic Peer client
     #[instrument(name = "datomic_peer_client_new")]
-    pub async fn new(config: AppConfig) -> Result<Self> {
+    pub async fn new(app_config: AppConfig) -> Result<Self> { // Changed variable name for clarity
         info!("Initializing Datomic Peer API client");
         
-        let jvm = Self::get_or_create_jvm(&config.datomic)?;
+        // Pass the datomic_config part of app_config
+        let jvm = Self::get_or_create_jvm(&app_config.datomic)?;
         
         let client = DatomicPeerClient {
             jvm,
-            config: config.datomic.clone(),
+            config: app_config.datomic.clone(), // Corrected variable name
             retry_config: RetryConfig::default(),
             // connection_pool: Arc::new(Mutex::new(ConnectionPool {
             //     connections: Vec::new(),
@@ -74,56 +75,79 @@ impl DatomicPeerClient {
         Ok(client)
     }
 
+    // Removed 'use anyhow::anyhow;' from here, as it's moved to the top
+
     /// Get or create the JVM instance with proper configuration
-    fn get_or_create_jvm(config: &DatomicConfig) -> Result<Arc<JavaVM>> {
-        unsafe {
-            JVM_INIT.call_once(|| {
-                info!("Initializing JVM for Datomic Peer API");
-                
-                let classpath = match crate::config::AppConfig::default().get_datomic_classpath() {
-                    Ok(cp) => cp,
-                    Err(e) => {
-                        error!("Failed to get Datomic classpath: {}", e);
-                        return;
-                    }
-                };
-                
-                debug!("Using classpath: {}", classpath);
-                
-                let class_path_arg = format!("-Djava.class.path={}", classpath);
-                let mut jvm_args = InitArgsBuilder::new()
-                    .version(JNIVersion::V8)
-                    .option(&class_path_arg);
-                
-                // Add JVM options from config
-                for opt in &config.jvm_opts {
-                    jvm_args = jvm_args.option(opt);
+    fn get_or_create_jvm(datomic_config: &DatomicConfig) -> Result<Arc<JavaVM>> {
+        JVM.get_or_try_init(|| {
+            info!("Initializing JVM for Datomic Peer API");
+
+            // Inline the logic from AppConfig::get_datomic_classpath
+            let classpath_result: anyhow::Result<String> = (|| {
+                let lib_path = datomic_config.datomic_lib_path.as_ref()
+                    .ok_or_else(|| anyhow!("Datomic lib path not configured in DatomicConfig."))?;
+
+                if !lib_path.exists() {
+                    return Err(anyhow!("Datomic lib path does not exist: {}", lib_path.display()));
                 }
                 
-                let args = match jvm_args.build() {
-                    Ok(args) => args,
-                    Err(e) => {
-                        error!("Failed to build JVM args: {}", e);
-                        return;
-                    }
-                };
+                let mut classpath_entries = Vec::new();
+                for entry in std::fs::read_dir(lib_path)
+                    .map_err(|e| anyhow!("Failed to read Datomic lib directory: {}", e))? {
+                    let entry = entry.map_err(|e| anyhow!("Error reading directory entry: {}", e))?;
+                    let path = entry.path();
 
-                let jvm = match JavaVM::new(args) {
-                    Ok(jvm) => jvm,
-                    Err(e) => {
-                        error!("Failed to create JVM: {}", e);
-                        return;
+                    if path.extension().and_then(|s| s.to_str()) == Some("jar") {
+                        classpath_entries.push(path.to_string_lossy().to_string());
                     }
-                };
+                }
                 
-                info!("JVM initialized successfully");
-                JVM = Some(Arc::new(jvm));
-            });
+                if classpath_entries.is_empty() {
+                    return Err(anyhow!("No JAR files found in Datomic lib path: {}", lib_path.display()));
+                }
+                
+                Ok(classpath_entries.join(if cfg!(windows) { ";" } else { ":" }))
+            })();
 
-            JVM.as_ref()
-                .ok_or_else(|| DatomicError::jvm_initialization_failed("JVM not initialized"))
-                .map(|jvm| jvm.clone())
-        }
+            let classpath = match classpath_result {
+                Ok(cp) => cp,
+                Err(e) => {
+                    error!("Failed to construct Datomic classpath: {}", e);
+                    // Convert anyhow::Error to DatomicError for the return type of get_or_try_init
+                    return Err(DatomicError::jvm_initialization_failed(format!("Classpath construction failed: {}", e)));
+                }
+            };
+
+            debug!("Using classpath: {}", classpath);
+
+            let class_path_arg = format!("-Djava.class.path={}", classpath);
+            let mut jvm_args_builder = InitArgsBuilder::new() // Renamed to avoid conflict
+                .version(JNIVersion::V8)
+                .option(&class_path_arg);
+
+            // Add JVM options from config
+            for opt in &datomic_config.jvm_opts {
+                jvm_args_builder = jvm_args_builder.option(opt);
+            }
+
+            let jvm_init_args = match jvm_args_builder.build() { // Renamed to avoid conflict
+                Ok(args) => args,
+                Err(e) => {
+                    error!("Failed to build JVM args: {}", e);
+                    return Err(DatomicError::jvm_initialization_failed(format!("Failed to build JVM args: {}", e)));
+                }
+            };
+
+            let jvm = JavaVM::new(jvm_init_args)
+                .map_err(|e| {
+                    error!("Failed to create JVM: {}", e);
+                    DatomicError::jvm_initialization_failed(format!("Failed to create JVM: {}", e))
+                })?;
+
+            info!("JVM initialized successfully");
+            Ok(Arc::new(jvm))
+        })
+        .map(|jvm_arc| jvm_arc.clone()) // Clone the Arc for the caller
     }
 
     /// Initialize database and schema
