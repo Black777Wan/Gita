@@ -26,7 +26,7 @@ hound = "3.5"
 crossbeam-channel = "0.5"
 dotenvy = "0.15"
 # Datomic Peer API dependencies
-jni = "0.21"
+jni = { version = "0.21", features = ["invocation"] }
 lazy_static = "1.4"
 edn-rs = "0.17"
 # Configuration and utilities

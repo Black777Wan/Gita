@@ -25,25 +25,25 @@ pub struct DatomicPeerClient {
     jvm: Arc<JavaVM>,
     config: DatomicConfig,
     retry_config: RetryConfig,
-    connection_pool: Arc<Mutex<ConnectionPool>>,
+    // connection_pool: Arc<Mutex<ConnectionPool>>, // Temporarily removed for Send/Sync diagnosis
 }
 
-#[derive(Debug)]
-struct ConnectionPool {
-    connections: Vec<DatomicConnection>,
-    available: Vec<usize>,
-    next_id: usize,
-}
+// #[derive(Debug)]
+// struct ConnectionPool {
+//     connections: Vec<DatomicConnection>,
+//     available: Vec<usize>,
+//     next_id: usize,
+// }
 
-#[derive(Debug, Clone)]
-struct DatomicConnection {
-    id: usize,
-    uri: String,
-    connection_obj: Option<jobject>,
-    created_at: Instant,
-    last_used: Instant,
-    in_use: bool,
-}
+// #[derive(Debug, Clone)]
+// struct DatomicConnection {
+//     id: usize,
+//     uri: String,
+//     // connection_obj: Option<jobject>, // Removed: jobject is !Send + !Sync
+//     created_at: Instant,
+//     last_used: Instant,
+//     in_use: bool,
+// }
 
 impl DatomicPeerClient {
     /// Create a new production-ready Datomic Peer client
@@ -57,11 +57,11 @@ impl DatomicPeerClient {
             jvm,
             config: config.datomic.clone(),
             retry_config: RetryConfig::default(),
-            connection_pool: Arc::new(Mutex::new(ConnectionPool {
-                connections: Vec::new(),
-                available: Vec::new(),
-                next_id: 0,
-            })),
+            // connection_pool: Arc::new(Mutex::new(ConnectionPool {
+            //     connections: Vec::new(),
+            //     available: Vec::new(),
+            //     next_id: 0,
+            // })), // Temporarily removed
         };
 
         // Initialize database and schema
@@ -87,9 +87,10 @@ impl DatomicPeerClient {
                 
                 debug!("Using classpath: {}", classpath);
                 
+                let class_path_arg = format!("-Djava.class.path={}", classpath);
                 let mut jvm_args = InitArgsBuilder::new()
                     .version(JNIVersion::V8)
-                    .option(&format!("-Djava.class.path={}", classpath));
+                    .option(&class_path_arg);
                 
                 // Add JVM options from config
                 for opt in &config.jvm_opts {
@@ -162,12 +163,14 @@ impl DatomicPeerClient {
             let uri_string = env.new_string(&db_uri)
                 .map_err(DatomicError::from)?;
             
-            let result = env.call_static_method_unchecked(
+            let uri_jobject: JObject = uri_string.into();
+            let method_args = [JValue::Object(uri_jobject)];
+            let result = unsafe { env.call_static_method_unchecked(
                 peer_class,
                 create_db_method,
-                jni::signature::JavaType::Primitive(jni::signature::Primitive::Boolean),
-                &[JValue::Object(uri_string.into())]
-            ).map_err(DatomicError::from)?;
+                jni::signature::ReturnType::Primitive(jni::signature::Primitive::Boolean),
+                &method_args
+            ).map_err(DatomicError::from)? };
             
             match result {
                 JValue::Bool(created) => Ok(created != 0),
@@ -237,12 +240,15 @@ impl DatomicPeerClient {
                 "(Ljava/lang/String;)V"
             ).map_err(DatomicError::from)?;
             
-            let schema_string = env.new_string(&schema_edn)
+            let schema_json_string = schema_edn.to_string();
+            let schema_string = env.new_string(&schema_json_string)
                 .map_err(DatomicError::from)?;
+            let schema_jobject: JObject = schema_string.into();
+            let method_args_new_object: [JValue; 1] = [JValue::Object(schema_jobject)];
             let reader_obj = env.new_object(
                 schema_reader,
                 schema_reader_init,
-                &[JValue::Object(schema_string.into())]
+                &method_args_new_object
             ).map_err(DatomicError::from)?;
             
             // Parse using EDN reader
@@ -254,15 +260,16 @@ impl DatomicPeerClient {
                 "(Ljava/io/Reader;)Ljava/util/List;"
             ).map_err(DatomicError::from)?;
             
-            let tx_data = env.call_static_method_unchecked(
+            let method_args_read_all = [JValue::Object(reader_obj)];
+            let tx_data = unsafe { env.call_static_method_unchecked(
                 util_class,
                 read_all_method,
-                jni::signature::JavaType::Object("java/util/List".to_string()),
-                &[JValue::Object(reader_obj)]
-            ).map_err(DatomicError::from)?;
+                jni::signature::ReturnType::Object,
+                &method_args_read_all
+            ).map_err(DatomicError::from)? };
             
             // Transact
-            let connection_class = env.get_object_class(conn)
+            let connection_class = env.get_object_class(&conn) // Borrow conn
                 .map_err(DatomicError::from)?;
             let transact_method = env.get_method_id(
                 connection_class,
@@ -270,15 +277,18 @@ impl DatomicPeerClient {
                 "(Ljava/util/List;)Ljava/util/concurrent/Future;"
             ).map_err(DatomicError::from)?;
             
-            let future = env.call_method_unchecked(
-                conn,
+            let tx_data_obj = tx_data.l()?;
+            let method_args_transact = [JValue::Object(tx_data_obj)];
+            let future = unsafe { env.call_method_unchecked(
+                &conn, // Borrow conn
                 transact_method,
-                jni::signature::JavaType::Object("java/util/concurrent/Future".to_string()),
-                &[JValue::Object(tx_data.l()?.into())]
-            ).map_err(DatomicError::from)?;
+                jni::signature::ReturnType::Object,
+                &method_args_transact
+            ).map_err(DatomicError::from)? };
             
             // Wait for result
-            let future_class = env.get_object_class(future.l()?)
+            let future_obj = future.l()?;
+            let future_class = env.get_object_class(&future_obj) // Borrow future_obj
                 .map_err(DatomicError::from)?;
             let get_method = env.get_method_id(
                 future_class,
@@ -286,12 +296,12 @@ impl DatomicPeerClient {
                 "()Ljava/lang/Object;"
             ).map_err(DatomicError::from)?;
             
-            let _result = env.call_method_unchecked(
-                future.l()?,
+            let _result = unsafe { env.call_method_unchecked(
+                &future_obj, // Borrow future_obj
                 get_method,
-                jni::signature::JavaType::Object("java/lang/Object".to_string()),
+                jni::signature::ReturnType::Object,
                 &[]
-            ).map_err(DatomicError::from)?;
+            ).map_err(DatomicError::from)? };
             
             Ok(())
         };
@@ -301,7 +311,7 @@ impl DatomicPeerClient {
     }
 
     /// Get a connection to the database
-    fn get_connection_jni(env: &JNIEnv, db_uri: &str) -> Result<JObject> {
+    fn get_connection_jni<'a>(env: &'a JNIEnv, db_uri: &str) -> Result<JObject<'a>> {
         let peer_class = env.find_class("datomic/Peer")
             .map_err(DatomicError::from)?;
         
@@ -314,12 +324,14 @@ impl DatomicPeerClient {
         let uri_string = env.new_string(db_uri)
             .map_err(DatomicError::from)?;
         
-        let connection = env.call_static_method_unchecked(
+        let uri_jobject: JObject = uri_string.into();
+        let method_args = [JValue::from(uri_jobject)];
+        let connection = unsafe { env.call_static_method_unchecked(
             peer_class,
             connect_method,
-            jni::signature::JavaType::Object("datomic/Connection".to_string()),
-            &[JValue::Object(uri_string.into())]
-        ).map_err(DatomicError::from)?;
+            jni::signature::ReturnType::Object,
+            &method_args
+        ).map_err(DatomicError::from)? };
         
         Ok(connection.l()?)
     }
@@ -353,12 +365,14 @@ impl DatomicPeerClient {
             let query_string = env.new_string(&query_str)
                 .map_err(DatomicError::from)?;
             
-            let result = env.call_static_method_unchecked(
+            let query_jobject: JObject = query_string.into();
+            let method_args = [JValue::from(query_jobject), JValue::from(db)];
+            let result = unsafe { env.call_static_method_unchecked(
                 peer_class,
                 query_method,
-                jni::signature::JavaType::Object("java/util/Collection".to_string()),
-                &[JValue::Object(query_string.into()), JValue::Object(db)]
-            ).map_err(DatomicError::from)?;
+                jni::signature::ReturnType::Object,
+                &method_args
+            ).map_err(DatomicError::from)? };
             
             // Convert result to Rust data structures
             Self::convert_query_result(&env, result.l()?)
@@ -370,8 +384,8 @@ impl DatomicPeerClient {
     }
 
     /// Get database from connection
-    fn get_database_jni(env: &JNIEnv, conn: JObject) -> Result<JObject> {
-        let connection_class = env.get_object_class(conn)
+    fn get_database_jni<'a>(env: &'a JNIEnv, conn: JObject<'a>) -> Result<JObject<'a>> {
+        let connection_class = env.get_object_class(&conn) // Borrow conn
             .map_err(DatomicError::from)?;
         let db_method = env.get_method_id(
             connection_class,
@@ -379,12 +393,12 @@ impl DatomicPeerClient {
             "()Ldatomic/Database;"
         ).map_err(DatomicError::from)?;
         
-        let db = env.call_method_unchecked(
-            conn,
+        let db = unsafe { env.call_method_unchecked(
+            &conn, // Borrow conn
             db_method,
-            jni::signature::JavaType::Object("datomic/Database".to_string()),
+            jni::signature::ReturnType::Object,
             &[]
-        ).map_err(DatomicError::from)?;
+        ).map_err(DatomicError::from)? };
         
         Ok(db.l()?)
     }
@@ -405,34 +419,57 @@ impl DatomicPeerClient {
     /// Create a new block
     #[instrument(skip(self))]
     pub async fn create_block(&self, block_data: CreateBlockRequest, audio_meta: Option<AudioMeta>) -> Result<Block> {
-        info!("Creating block with content: {}", block_data.content);
+        info!("Creating block with content: {:?}", block_data.content); // Use {:?} for Option
         
         let block_id = Uuid::new_v4().to_string();
         let now = Utc::now();
         
         // Build transaction data
         let mut tx_data = HashMap::new();
-        tx_data.insert("db/id".to_string(), Value::String("datomic.tx".to_string()));
-        tx_data.insert("block/id".to_string(), Value::String(block_id.clone()));
-        tx_data.insert("block/content".to_string(), Value::String(block_data.content.clone()));
-        tx_data.insert("block/created-at".to_string(), Value::String(now.to_rfc3339()));
-        
-        if let Some(page_id) = &block_data.page_id {
-            tx_data.insert("block/page".to_string(), Value::String(page_id.clone()));
+        // tx_data.insert("db/id".to_string(), Value::String("datomic.tx".to_string())); // Removed: This entity map itself defines the new block
+        tx_data.insert(":block/id".to_string(), Value::String(block_id.clone()));
+        if let Some(content) = &block_data.content {
+            tx_data.insert(":block/content".to_string(), Value::String(content.clone()));
+        }
+        tx_data.insert(":block/created_at".to_string(), Value::String(now.to_rfc3339()));
+        tx_data.insert(":block/updated_at".to_string(), Value::String(now.to_rfc3339())); // Set updated_at on creation
+        tx_data.insert(":block/is_page".to_string(), Value::Bool(block_data.is_page));
+
+        if let Some(page_title) = &block_data.page_title {
+            tx_data.insert(":block/page_title".to_string(), Value::String(page_title.clone()));
         }
         
         if let Some(parent_id) = &block_data.parent_id {
-            tx_data.insert("block/parent".to_string(), Value::String(parent_id.clone()));
+            tx_data.insert(":block/parent".to_string(), Value::String(parent_id.clone())); // Assuming parent_id is a string ID
         }
         
-        if let Some(order) = block_data.order {
-            tx_data.insert("block/order".to_string(), Value::Number(order.into()));
-        }
+        tx_data.insert(":block/order".to_string(), Value::Number(block_data.order.into()));
         
-        // Add audio metadata if present
+        let mut audio_timestamp_to_return: Option<AudioTimestamp> = None;
+
+        // Add audio metadata if present by creating a new AudioTimestamp entity
         if let Some(audio) = &audio_meta {
-            tx_data.insert("block/audio-file".to_string(), Value::String(audio.file_path.clone()));
-            tx_data.insert("block/audio-timestamp".to_string(), Value::Number(audio.timestamp_ms.into()));
+            // In a real Datomic transaction, you'd likely create a new entity for AudioTimestamp
+            // and link it. For simplicity here, we might be embedding or just using parts.
+            // The current Block model has Option<AudioTimestamp>.
+            // Let's assume we are creating an AudioTimestamp and want to link its ID or store parts.
+            // For now, let's assume the schema supports direct embedding or specific attributes for audio.
+            // Based on `Block` model, it expects `AudioTimestamp` struct.
+             audio_timestamp_to_return = Some(AudioTimestamp {
+                block_id: block_id.clone(),
+                recording_id: audio.recording_id.clone(),
+                timestamp_seconds: audio.timestamp,
+                recording: None, // Assuming we don't fetch the full recording here
+            });
+            // This part of tx_data would need to reflect how AudioTimestamp is stored/linked in Datomic.
+            // E.g., if AudioTimestamp is a separate entity:
+            // let audio_ts_id = format!("audio_ts_{}", Uuid::new_v4());
+            // tx_data.insert(":block/audio_ts_ref", Value::String(audio_ts_id)); // Example ref
+            // And another map in the transaction vector for the AudioTimestamp entity itself.
+            // For simplicity, if schema expects direct attributes on block for this:
+            tx_data.insert(":timestamp/recording_id".to_string(), Value::String(audio.recording_id.clone()));
+            tx_data.insert(":timestamp/seconds".to_string(), Value::Number(audio.timestamp.into()));
+
         }
         
         // Execute transaction
@@ -444,11 +481,11 @@ impl DatomicPeerClient {
             content: block_data.content,
             created_at: now,
             updated_at: now,
-            page_id: block_data.page_id,
+            page_title: block_data.page_title,
             parent_id: block_data.parent_id,
             order: block_data.order,
-            audio_file: audio_meta.as_ref().map(|a| a.file_path.clone()),
-            audio_timestamp: audio_meta.as_ref().map(|a| a.timestamp_ms),
+            is_page: block_data.is_page,
+            audio_timestamp: audio_timestamp_to_return,
         };
         
         info!("Block created successfully: {}", block.id);
