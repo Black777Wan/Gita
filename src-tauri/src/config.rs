@@ -155,35 +155,11 @@ impl AppConfig {
         None
     }
     
-    /// Generate JVM classpath for Datomic
-    pub fn get_datomic_classpath(&self) -> Result<String> {
-        let lib_path = self.datomic.datomic_lib_path.as_ref()
-            .ok_or_else(|| anyhow!("Datomic lib path not configured. Please set DATOMIC_LIB_PATH environment variable or ensure Datomic is installed in a standard location."))?;
-        
-        if !lib_path.exists() {
-            return Err(anyhow!("Datomic lib path does not exist: {}", lib_path.display()));
-        }
-        
-        // Build classpath with all JAR files
-        let mut classpath = Vec::new();
-        
-        for entry in std::fs::read_dir(lib_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            
-            if path.extension().and_then(|s| s.to_str()) == Some("jar") {
-                classpath.push(path.to_string_lossy().to_string());
-            }
-        }
-        
-        if classpath.is_empty() {
-            return Err(anyhow!("No JAR files found in Datomic lib path: {}", lib_path.display()));
-        }
-        
-        Ok(classpath.join(";"))
-    }
-    
+    // Removed unused get_datomic_classpath method as its logic was inlined
+    // into database_peer_complete.rs to fix classpath resolution issues.
+
     /// Save current configuration to file
+    #[allow(dead_code)] // Acknowledging this method is currently unused
     pub fn save(&self) -> Result<()> {
         let config_content = toml::to_string_pretty(self)
             .map_err(|e| anyhow!("Failed to serialize config: {}", e))?;

@@ -2,6 +2,7 @@ use thiserror::Error;
 use std::fmt;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)] // Acknowledging some variants/methods might be unused currently
 pub enum DatomicError {
     #[error("JNI error: {0}")]
     JniError(#[from] jni::errors::Error),
@@ -67,6 +68,7 @@ pub enum DatomicError {
     InternalError(String),
 }
 
+#[allow(dead_code)] // Acknowledging some constructor methods might be unused currently
 impl DatomicError {
     pub fn connection_error<T: Into<String>>(msg: T) -> Self {
         DatomicError::ConnectionError(msg.into())
@@ -185,12 +187,12 @@ impl Default for RetryConfig {
 
 /// Execute a fallible operation with retry logic
 pub async fn with_retry<F, T, E>(
-    operation: F,
+    mut operation: F, // Added mut here
     config: &RetryConfig,
     operation_name: &str,
 ) -> Result<T>
 where
-    F: Fn() -> std::result::Result<T, E> + Send + Sync,
+    F: FnMut() -> std::result::Result<T, E> + Send + Sync, // Changed Fn to FnMut
     E: fmt::Display + fmt::Debug + Send + Sync,
 {
     let mut delay = config.initial_delay_ms;
@@ -275,7 +277,7 @@ mod tests {
             backoff_multiplier: 2.0,
         };
         
-        let result = with_retry(
+        let result: Result<i32> = with_retry( // Added type annotation Result<i32> which implies Result<i32, DatomicError>
             || Err("Always fails"),
             &config,
             "test_operation",
