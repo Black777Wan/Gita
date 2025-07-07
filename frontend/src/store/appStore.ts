@@ -59,6 +59,7 @@ export interface AudioMeta {
 interface AppState {
   // Data state
   blocks: Block[];
+  pages: Block[];
   currentPage?: Block;
   isLoading: boolean;
   error?: string;
@@ -83,6 +84,7 @@ interface AppState {
 export const useAppStore = create<AppState>((set, get) => ({
   // Initial state
   blocks: [],
+  pages: [],
   currentPage: undefined,
   isLoading: false,
   error: undefined,
@@ -99,9 +101,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       try {
         const blocks: Block[] = await invoke('get_daily_note', { date });
         const currentPage = blocks.find(block => block.is_page);
+        const pages: Block[] = await invoke('get_pages');
         set({
           blocks,
           currentPage,
+          pages,
           isLoading: false
         });
       } catch (error) {
@@ -130,9 +134,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (page) {
           const children: Block[] = await invoke('get_block_children', { parentId: page.id });
           const blocks = [page, ...children];
+          const pages: Block[] = await invoke('get_pages');
           set({
             blocks,
             currentPage: page,
+            pages,
             isLoading: false
           });
         } else {
@@ -148,9 +154,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           // If createBlock did nothing due to lack of Tauri, newPage might be undefined or represent an error.
           // This needs careful handling based on createBlock's guarded implementation.
           if (newPage) { // Assuming createBlock returns something meaningful or null/undefined
+            const pages: Block[] = await invoke('get_pages');
             set({
               blocks: [newPage],
               currentPage: newPage,
+              pages,
               isLoading: false
             });
           } else {

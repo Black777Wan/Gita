@@ -4,7 +4,7 @@ import { useAppStore } from '../store/appStore';
 import { format, subDays } from 'date-fns';
 
 export const Sidebar: React.FC = () => {
-  const { loadDailyNote, loadPage, currentPage } = useAppStore();
+  const { loadDailyNote, loadPage, currentPage, pages } = useAppStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [newPageTitle, setNewPageTitle] = useState('');
   const [showNewPageInput, setShowNewPageInput] = useState(false);
@@ -12,6 +12,10 @@ export const Sidebar: React.FC = () => {
   const handleDailyNoteClick = (date: Date) => {
     const dateStr = format(date, 'yyyy-MM-dd');
     loadDailyNote(dateStr);
+  };
+
+  const handlePageClick = (title: string) => {
+    loadPage(title);
   };
 
   const handleCreatePage = async (e: React.KeyboardEvent) => {
@@ -102,10 +106,21 @@ export const Sidebar: React.FC = () => {
         )}
         
         <div className="pages-list">
-          {/* In a full implementation, this would show recent/favorite pages */}
-          <div className="empty-state">
-            <span>Create pages by typing [[Page Name]] in your notes</span>
-          </div>
+          {pages && pages.filter(p => !p.page_title?.startsWith("Daily Notes/")).map((page) => (
+            <button
+              key={page.id}
+              className={`page-item ${currentPage?.id === page.id ? 'selected' : ''}`}
+              onClick={() => handlePageClick(page.page_title!)}
+            >
+              <FileText size={14} className="file-icon" />
+              <span className="page-title">{page.page_title}</span>
+            </button>
+          ))}
+          {(!pages || pages.filter(p => !p.page_title?.startsWith("Daily Notes/")).length === 0) && !showNewPageInput && (
+             <div className="empty-state">
+               <span>Create pages with [[Page Name]]</span>
+             </div>
+          )}
         </div>
       </div>
 
