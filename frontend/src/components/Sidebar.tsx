@@ -4,25 +4,41 @@ import { useAppStore } from '../store/appStore';
 import { format, subDays } from 'date-fns';
 
 export const Sidebar: React.FC = () => {
-  const { loadDailyNote, loadPage, currentPage, pages } = useAppStore();
+  const { loadDailyNote, loadPage, currentPage, pages, isLoading, error } = useAppStore();
   const [searchQuery, setSearchQuery] = useState('');
   const [newPageTitle, setNewPageTitle] = useState('');
   const [showNewPageInput, setShowNewPageInput] = useState(false);
+  const [isCreatingPage, setIsCreatingPage] = useState(false);
 
-  const handleDailyNoteClick = (date: Date) => {
-    const dateStr = format(date, 'yyyy-MM-dd');
-    loadDailyNote(dateStr);
+  const handleDailyNoteClick = async (date: Date) => {
+    try {
+      const dateStr = format(date, 'yyyy-MM-dd');
+      await loadDailyNote(dateStr);
+    } catch (error) {
+      console.error('Failed to load daily note:', error);
+    }
   };
 
-  const handlePageClick = (title: string) => {
-    loadPage(title);
+  const handlePageClick = async (title: string) => {
+    try {
+      await loadPage(title);
+    } catch (error) {
+      console.error('Failed to load page:', error);
+    }
   };
 
   const handleCreatePage = async (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && newPageTitle.trim()) {
-      await loadPage(newPageTitle.trim());
-      setNewPageTitle('');
-      setShowNewPageInput(false);
+      setIsCreatingPage(true);
+      try {
+        await loadPage(newPageTitle.trim());
+        setNewPageTitle('');
+        setShowNewPageInput(false);
+      } catch (error) {
+        console.error('Failed to create page:', error);
+      } finally {
+        setIsCreatingPage(false);
+      }
     } else if (e.key === 'Escape') {
       setNewPageTitle('');
       setShowNewPageInput(false);
@@ -33,6 +49,20 @@ export const Sidebar: React.FC = () => {
 
   return (
     <div className="sidebar">
+      {error && (
+        <div className="error-message" style={{ 
+          padding: '8px 12px', 
+          margin: '8px 12px',
+          backgroundColor: '#fee2e2',
+          border: '1px solid #fecaca',
+          borderRadius: '4px',
+          color: '#dc2626',
+          fontSize: '12px'
+        }}>
+          {error}
+        </div>
+      )}
+      
       <div className="sidebar-section">
         <div className="section-header">
           <Search size={16} />
@@ -64,6 +94,7 @@ export const Sidebar: React.FC = () => {
                 key={dateStr}
                 className={`daily-note-item ${isSelected ? 'selected' : ''}`}
                 onClick={() => handleDailyNoteClick(date)}
+                disabled={isLoading}
               >
                 <span className="date-display">
                   {isToday ? 'Today' : displayStr}
@@ -83,6 +114,7 @@ export const Sidebar: React.FC = () => {
             className="add-page-button"
             onClick={() => setShowNewPageInput(true)}
             title="Create new page"
+            disabled={isLoading || isCreatingPage}
           >
             <Plus size={14} />
           </button>
@@ -91,16 +123,17 @@ export const Sidebar: React.FC = () => {
         {showNewPageInput && (
           <input
             type="text"
-            placeholder="Page title..."
+            placeholder={isCreatingPage ? "Creating page..." : "Page title..."}
             value={newPageTitle}
             onChange={(e) => setNewPageTitle(e.target.value)}
             onKeyDown={handleCreatePage}
             onBlur={() => {
-              if (!newPageTitle.trim()) {
+              if (!newPageTitle.trim() && !isCreatingPage) {
                 setShowNewPageInput(false);
               }
             }}
             className="new-page-input"
+            disabled={isCreatingPage}
             autoFocus
           />
         )}
@@ -111,6 +144,7 @@ export const Sidebar: React.FC = () => {
               key={page.id}
               className={`page-item ${currentPage?.id === page.id ? 'selected' : ''}`}
               onClick={() => handlePageClick(page.page_title!)}
+              disabled={isLoading}
             >
               <FileText size={14} className="file-icon" />
               <span className="page-title">{page.page_title}</span>

@@ -116,11 +116,26 @@ export const useAppStore = create<AppState>((set, get) => ({
         });
       }
     } else {
-      console.warn('Tauri API (window.__TAURI__) not found. Skipping loadDailyNote.');
+      console.warn('Tauri API not found. Using mock data for development.');
+      // Create mock daily note page
+      const mockPage: Block = {
+        id: `daily-${date}`,
+        content: undefined,
+        page_title: `Daily Notes/${date}`,
+        is_page: true,
+        order: 0,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      
+      // Get existing pages from state or create empty array
+      const existingPages = get().pages || [];
+      
       set({ 
         isLoading: false,
-        blocks: [],
-        currentPage: undefined,
+        blocks: [mockPage],
+        currentPage: mockPage,
+        pages: existingPages.some(p => p.id === mockPage.id) ? existingPages : [...existingPages, mockPage],
       });
     }
   },
@@ -143,7 +158,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           });
         } else {
           // Create new page
-          // Ensure createBlock itself is guarded or this will fail if __TAURI__ is not present
           const newPage = await get().createBlock({
             content: undefined,
             parent_id: undefined,
@@ -151,9 +165,8 @@ export const useAppStore = create<AppState>((set, get) => ({
             is_page: true,
             page_title: title,
           });
-          // If createBlock did nothing due to lack of Tauri, newPage might be undefined or represent an error.
-          // This needs careful handling based on createBlock's guarded implementation.
-          if (newPage) { // Assuming createBlock returns something meaningful or null/undefined
+          
+          if (newPage) {
             const pages: Block[] = await invoke('get_pages');
             set({
               blocks: [newPage],
@@ -162,7 +175,6 @@ export const useAppStore = create<AppState>((set, get) => ({
               isLoading: false
             });
           } else {
-            // If newPage couldn't be created (e.g., Tauri not available), set appropriate state
             set({
               blocks: [],
               currentPage: undefined,
@@ -179,12 +191,39 @@ export const useAppStore = create<AppState>((set, get) => ({
         });
       }
     } else {
-      console.warn('Tauri API (window.__TAURI__) not found. Skipping loadPage.');
-      set({ 
-        isLoading: false,
-        blocks: [],
-        currentPage: undefined,
-      });
+      console.warn('Tauri API not found. Using mock data for development.');
+      // Check if page already exists in state
+      const existingPages = get().pages || [];
+      let existingPage = existingPages.find(p => p.page_title === title);
+      
+      if (!existingPage) {
+        // Create new mock page
+        existingPage = {
+          id: `page-${Date.now()}`,
+          content: undefined,
+          page_title: title,
+          is_page: true,
+          order: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+        
+        // Add to pages list
+        const updatedPages = [...existingPages, existingPage];
+        set({
+          pages: updatedPages,
+          blocks: [existingPage],
+          currentPage: existingPage,
+          isLoading: false
+        });
+      } else {
+        // Load existing page
+        set({
+          blocks: [existingPage],
+          currentPage: existingPage,
+          isLoading: false
+        });
+      }
     }
   },
 
@@ -202,16 +241,39 @@ export const useAppStore = create<AppState>((set, get) => ({
       } catch (error) {
         console.error("Error invoking create_block:", error);
         set({ error: error as string });
-        throw error; // Re-throw or handle as per desired UX
+        throw error;
       }
     } else {
-      console.warn('Tauri API (window.__TAURI__) not found. Skipping createBlock.');
-      // Decide what to return or how to signal failure.
-      // Throwing an error might be appropriate if the caller expects a Block.
-      // Or return a specific value like null or undefined and let caller handle.
-      // For now, logging and throwing an error.
-      set({ error: "Tauri API not available" });
-      throw new Error("Tauri API not available, cannot create block.");
+      console.warn('Tauri API not found. Creating mock block for development.');
+      // Create mock block
+      const newBlock: Block = {
+        id: `block-${Date.now()}`,
+        content: blockData.content,
+        parent_id: blockData.parent_id,
+        order: blockData.order,
+        is_page: blockData.is_page,
+        page_title: blockData.page_title,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      
+      // Add audio timestamp if provided
+      if (audioMeta) {
+        newBlock.audio_timestamp = {
+          id: Date.now(),
+          block_id: newBlock.id,
+          recording_id: audioMeta.recording_id,
+          timestamp_seconds: audioMeta.timestamp,
+        };
+      }
+
+      set(state => ({
+        blocks: [...state.blocks, newBlock],
+        // Update pages if this is a page block
+        pages: blockData.is_page ? [...(state.pages || []), newBlock] : state.pages
+      }));
+
+      return newBlock;
     }
   },
 
@@ -231,12 +293,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       } catch (error) {
         console.error("Error invoking update_block_content:", error);
         set({ error: error as string });
-        throw error; // Re-throw or handle
+        throw error;
       }
     } else {
-      console.warn('Tauri API (window.__TAURI__) not found. Skipping updateBlockContent.');
-      set({ error: "Tauri API not available" });
-      // Potentially throw an error or manage state to indicate failure
+      console.warn('Tauri API not found. Updating mock block for development.');
+      // Update mock block
+      set(state => ({
+        blocks: state.blocks.map(block =>
+          block.id === blockId
+            ? { ...block, content, updated_at: new Date().toISOString() }
+            : block
+        )
+      }));
     }
   },
 
@@ -252,12 +320,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       } catch (error) {
         console.error("Error invoking delete_block:", error);
         set({ error: error as string });
-        throw error; // Re-throw or handle
+        throw error;
       }
     } else {
-      console.warn('Tauri API (window.__TAURI__) not found. Skipping deleteBlock.');
-      set({ error: "Tauri API not available" });
-      // Potentially throw an error or manage state to indicate failure
+      console.warn('Tauri API not found. Deleting mock block for development.');
+      // Delete mock block
+      set(state => ({
+        blocks: state.blocks.filter(block => block.id !== blockId),
+        pages: state.pages?.filter(page => page.id !== blockId)
+      }));
     }
   },
 
