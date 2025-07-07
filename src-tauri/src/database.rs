@@ -1,7 +1,7 @@
 //! Async Postgres access layer using SQLx.
 
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use uuid::Uuid;
 

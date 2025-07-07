@@ -76,16 +76,25 @@ async fn start_recording(
 ) -> Result<String, String> {
     let page_uuid = Uuid::parse_str(&page_id).map_err(|e| e.to_string())?;
     let rec_id = Uuid::new_v4();
-    let path = format!("/home/ubuntu/gita/audio/{rec_id}.wav");
+    
+    // Create a platform-agnostic path for audio files
+    let audio_dir = if cfg!(target_os = "windows") {
+        std::env::temp_dir().join("gita").join("audio")
+    } else {
+        std::path::PathBuf::from("/home/ubuntu/gita/audio")
+    };
+    
+    let path = audio_dir.join(format!("{rec_id}.wav"));
+    let path_str = path.to_string_lossy().to_string();
 
-    db.create_audio_recording(&rec_id, &page_uuid, &path)
+    db.create_audio_recording(&rec_id, &page_uuid, &path_str)
         .await
         .map_err(|e| e.to_string())?;
 
     engine
         .lock()
         .unwrap()
-        .start_recording(&path)
+        .start_recording(&path_str)
         .map_err(|e| e.to_string())?;
 
     Ok(rec_id.to_string())
@@ -145,7 +154,12 @@ fn main() {
             app.manage(db);
 
             /* audio */
-            std::fs::create_dir_all("/home/ubuntu/gita/audio").ok();
+            let audio_dir = if cfg!(target_os = "windows") {
+                std::env::temp_dir().join("gita").join("audio")
+            } else {
+                std::path::PathBuf::from("/home/ubuntu/gita/audio")
+            };
+            std::fs::create_dir_all(&audio_dir).ok();
             let engine = Arc::new(Mutex::new(
                 AudioEngine::new().expect("audio init failed"),
             ));

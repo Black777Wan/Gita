@@ -63,7 +63,7 @@ impl AudioEngine {
             for d in devs {
                 if let Ok(name) = d.name() {
                     out.push(AudioDevice {
-                        name,
+                        name: name.clone(),
                         is_default: default_in.as_deref() == Some(&name),
                         device_type: "input".into(),
                     });
@@ -80,7 +80,7 @@ impl AudioEngine {
             for d in devs {
                 if let Ok(name) = d.name() {
                     out.push(AudioDevice {
-                        name,
+                        name: name.clone(),
                         is_default: default_out.as_deref() == Some(&name),
                         device_type: "output".into(),
                     });
