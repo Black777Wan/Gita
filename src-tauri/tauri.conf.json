@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.gita.app",
   "build": {
-    "beforeDevCommand": "powershell -c \"Push-Location ../frontend; npm run dev; Pop-Location\"",
-    "beforeBuildCommand": "powershell -c \"Push-Location ../frontend; npm run build; Pop-Location\"",
+    "beforeDevCommand": "cd frontend && npm run dev",
+    "beforeBuildCommand": "cd frontend && npm run build",
     "devUrl": "http://localhost:3000",
     "frontendDist": "../frontend/build"
   },
