@@ -246,6 +246,18 @@ body {
   background: #bfdbfe;
 }
 
+.saving-indicator {
+  display: flex;
+  align-items: center;
+  opacity: 0.7;
+  animation: fade 1s infinite alternate;
+}
+
+@keyframes fade {
+  from { opacity: 0.3; }
+  to { opacity: 0.8; }
+}
+
 .block-content {
   flex: 1;
   position: relative;

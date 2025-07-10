@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Play, Volume2 } from 'lucide-react';
 import { useAppStore, Block } from '../store/appStore';
 
@@ -11,11 +11,47 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
   const { updateBlockContent, deleteBlock, playAudioFromTimestamp } = useAppStore();
   const [isEditing, setIsEditing] = useState(false);
   const [content, setContent] = useState(block.content || '');
+  const [isSaving, setIsSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     setContent(block.content || '');
   }, [block.content]);
+
+  // Auto-save with debounce
+  const debouncedSave = useCallback(async (newContent: string) => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    
+    saveTimeoutRef.current = setTimeout(async () => {
+      if (newContent.trim() === '') {
+        // Don't auto-delete empty blocks, only on explicit save
+        return;
+      }
+      
+      if (newContent !== block.content) {
+        try {
+          setIsSaving(true);
+          await updateBlockContent(block.id, newContent);
+        } catch (error) {
+          console.error('Auto-save failed:', error);
+        } finally {
+          setIsSaving(false);
+        }
+      }
+    }, 500); // Save after 500ms of no typing
+  }, [block.id, block.content, updateBlockContent]);
+
+  // Clean up timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const handleEdit = () => {
     setIsEditing(true);
@@ -26,6 +62,12 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
   };
 
   const handleSave = async () => {
+    // Clear any pending auto-save
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
+
     if (content.trim() === '') {
       // Delete empty block
       await deleteBlock(block.id);
@@ -33,9 +75,23 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
     }
 
     if (content !== block.content) {
-      await updateBlockContent(block.id, content);
+      try {
+        setIsSaving(true);
+        await updateBlockContent(block.id, content);
+      } catch (error) {
+        console.error('Save failed:', error);
+        throw error;
+      } finally {
+        setIsSaving(false);
+      }
     }
     setIsEditing(false);
+  };
+
+  const handleContentChange = (newContent: string) => {
+    setContent(newContent);
+    // Trigger auto-save
+    debouncedSave(newContent);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -71,6 +127,11 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
     <div className="block-editor">
       <div className="block-controls">
         <div className="block-bullet">•</div>
+        {isSaving && (
+          <div className="saving-indicator" title="Saving...">
+            <span style={{ fontSize: '10px', color: '#6b7280' }}>●</span>
+          </div>
+        )}
         {block.audio_timestamp && (
           <button 
             className="audio-play-button"
@@ -87,7 +148,7 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
           <textarea
             ref={textareaRef}
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={(e) => handleContentChange(e.target.value)}
             onKeyDown={handleKeyDown}
             onBlur={handleSave}
             onInput={adjustTextareaHeight}

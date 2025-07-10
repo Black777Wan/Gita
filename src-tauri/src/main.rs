@@ -37,8 +37,7 @@ async fn update_block_content(
     content: String,
     db: tauri::State<'_, Database>,
 ) -> Result<(), String> {
-    let id = Uuid::parse_str(&block_id).map_err(|e| e.to_string())?;
-    db.update_block_content(&id, &content)
+    db.update_block_content(&block_id, &content)
         .await
         .map_err(|e| e.to_string())
 }
@@ -56,14 +55,17 @@ async fn get_block_children(
     parent_id: String,
     db: tauri::State<'_, Database>,
 ) -> Result<Vec<Block>, String> {
-    let id = Uuid::parse_str(&parent_id).map_err(|e| e.to_string())?;
-    db.get_block_children(&id).await.map_err(|e| e.to_string())
+    db.get_block_children(&parent_id).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 async fn delete_block(block_id: String, db: tauri::State<'_, Database>) -> Result<(), String> {
-    let id = Uuid::parse_str(&block_id).map_err(|e| e.to_string())?;
-    db.delete_block(&id).await.map_err(|e| e.to_string())
+    db.delete_block(&block_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_pages(db: tauri::State<'_, Database>) -> Result<Vec<Block>, String> {
+    db.get_pages().await.map_err(|e| e.to_string())
 }
 
 /* -------------------------- audio commands ------------------------- */
@@ -74,8 +76,7 @@ async fn start_recording(
     engine: tauri::State<'_, Arc<Mutex<AudioEngine>>>,
     db: tauri::State<'_, Database>,
 ) -> Result<String, String> {
-    let page_uuid = Uuid::parse_str(&page_id).map_err(|e| e.to_string())?;
-    let rec_id = Uuid::new_v4();
+    let rec_id = Uuid::new_v4().to_string();
     
     // Create a platform-agnostic path for audio files
     let audio_dir = if cfg!(target_os = "windows") {
@@ -84,10 +85,11 @@ async fn start_recording(
         std::path::PathBuf::from("/home/ubuntu/gita/audio")
     };
     
+    std::fs::create_dir_all(&audio_dir).map_err(|e| e.to_string())?;
     let path = audio_dir.join(format!("{rec_id}.wav"));
     let path_str = path.to_string_lossy().to_string();
 
-    db.create_audio_recording(&rec_id, &page_uuid, &path_str)
+    db.create_audio_recording(&rec_id, &page_id, &path_str)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -97,7 +99,7 @@ async fn start_recording(
         .start_recording(&path_str)
         .map_err(|e| e.to_string())?;
 
-    Ok(rec_id.to_string())
+    Ok(rec_id)
 }
 
 #[tauri::command]
@@ -106,14 +108,13 @@ async fn stop_recording(
     engine: tauri::State<'_, Arc<Mutex<AudioEngine>>>,
     db: tauri::State<'_, Database>,
 ) -> Result<(), String> {
-    let rec_uuid = Uuid::parse_str(&recording_id).map_err(|e| e.to_string())?;
     let secs = engine
         .lock()
         .unwrap()
         .stop_recording()
         .map_err(|e| e.to_string())?;
 
-    db.update_recording_duration(&rec_uuid, secs)
+    db.update_recording_duration(&recording_id, secs)
         .await
         .map_err(|e| e.to_string())
 }
@@ -134,8 +135,7 @@ async fn get_block_audio_timestamp(
     block_id: String,
     db: tauri::State<'_, Database>,
 ) -> Result<Option<AudioTimestamp>, String> {
-    let id = Uuid::parse_str(&block_id).map_err(|e| e.to_string())?;
-    db.get_block_audio_timestamp(&id)
+    db.get_block_audio_timestamp(&block_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -175,6 +175,7 @@ fn main() {
             get_page_by_title,
             get_block_children,
             delete_block,
+            get_pages,
             /* audio */
             start_recording,
             stop_recording,

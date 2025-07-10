@@ -1,8 +1,8 @@
-//! Async Postgres access layer using SQLx.
+//! Async SQLite access layer using SQLx.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 use uuid::Uuid;
 
 use crate::models::*;
@@ -10,15 +10,19 @@ use crate::models::*;
 /* -------------------------------------------------------------------- */
 
 pub struct Database {
-    pool: PgPool,
+    pool: SqlitePool,
 }
 
 impl Database {
     pub async fn new() -> Result<Self> {
-        let url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgresql://gita_user:12345@localhost/gita_db".into());
+        // Create data directory if it doesn't exist
+        let data_dir = std::env::current_dir()?.join("data");
+        std::fs::create_dir_all(&data_dir)?;
+        
+        let db_path = data_dir.join("gita.db");
+        let url = format!("sqlite://{}", db_path.to_string_lossy());
 
-        let pool = PgPoolOptions::new()
+        let pool = SqlitePoolOptions::new()
             .max_connections(10)
             .connect(&url)
             .await?;
@@ -56,13 +60,13 @@ impl Database {
         req: CreateBlockRequest,
         audio: Option<AudioMeta>,
     ) -> Result<Block> {
-        let id = Uuid::new_v4();
-        let now = Utc::now();
+        let id = Uuid::new_v4().to_string();
+        let now = Utc::now().to_rfc3339();
 
         sqlx::query!(
             r#"
-            INSERT INTO blocks (id,content,parent_id,"order",is_page,page_title,created_at,updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+            INSERT INTO blocks (id, content, parent_id, "order", is_page, page_title, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             "#,
             id,
             req.content,
@@ -84,11 +88,12 @@ impl Database {
         self.get_block_with_audio_timestamp(&id).await
     }
 
-    pub async fn update_block_content(&self, id: &Uuid, content: &str) -> Result<()> {
+    pub async fn update_block_content(&self, id: &str, content: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
         sqlx::query!(
-            r#"UPDATE blocks SET content=$1, updated_at=$2 WHERE id=$3"#,
+            r#"UPDATE blocks SET content=?1, updated_at=?2 WHERE id=?3"#,
             content,
-            Utc::now(),
+            now,
             id
         )
         .execute(&self.pool)
@@ -96,8 +101,8 @@ impl Database {
         Ok(())
     }
 
-    pub async fn delete_block(&self, id: &Uuid) -> Result<()> {
-        sqlx::query!(r#"DELETE FROM blocks WHERE id=$1"#, id)
+    pub async fn delete_block(&self, id: &str) -> Result<()> {
+        sqlx::query!(r#"DELETE FROM blocks WHERE id=?1"#, id)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -111,7 +116,7 @@ impl Database {
             SELECT id, content, parent_id, "order", is_page, page_title,
                    created_at, updated_at
             FROM blocks
-            WHERE page_title=$1 AND is_page=true
+            WHERE page_title=?1 AND is_page=1
             "#,
         )
         .bind(title)
@@ -124,13 +129,13 @@ impl Database {
         Ok(page)
     }
 
-    pub async fn get_block_children(&self, parent_id: &Uuid) -> Result<Vec<Block>> {
+    pub async fn get_block_children(&self, parent_id: &str) -> Result<Vec<Block>> {
         let mut rows = sqlx::query_as::<_, Block>(
             r#"
             SELECT id, content, parent_id, "order", is_page, page_title,
                    created_at, updated_at
             FROM blocks
-            WHERE parent_id=$1
+            WHERE parent_id=?1
             ORDER BY "order"
             "#,
         )
@@ -144,21 +149,41 @@ impl Database {
         Ok(rows)
     }
 
+    pub async fn get_pages(&self) -> Result<Vec<Block>> {
+        let mut pages = sqlx::query_as::<_, Block>(
+            r#"
+            SELECT id, content, parent_id, "order", is_page, page_title,
+                   created_at, updated_at
+            FROM blocks
+            WHERE is_page=1
+            ORDER BY page_title
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        for page in &mut pages {
+            page.audio_timestamp = self.get_block_audio_timestamp(&page.id).await?;
+        }
+        Ok(pages)
+    }
+
     /* ------------------------ audio metadata ------------------------ */
 
     pub async fn create_audio_recording(
         &self,
-        recording_id: &Uuid,
-        page_id: &Uuid,
+        recording_id: &str,
+        page_id: &str,
         path: &str,
     ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
         sqlx::query!(
             r#"INSERT INTO audio_recordings (id,page_id,file_path,recorded_at)
-               VALUES ($1,$2,$3,$4)"#,
+               VALUES (?1,?2,?3,?4)"#,
             recording_id,
             page_id,
             path,
-            Utc::now()
+            now
         )
         .execute(&self.pool)
         .await?;
@@ -167,11 +192,11 @@ impl Database {
 
     pub async fn update_recording_duration(
         &self,
-        recording_id: &Uuid,
+        recording_id: &str,
         secs: i32,
     ) -> Result<()> {
         sqlx::query!(
-            r#"UPDATE audio_recordings SET duration_seconds=$1 WHERE id=$2"#,
+            r#"UPDATE audio_recordings SET duration_seconds=?1 WHERE id=?2"#,
             secs,
             recording_id
         )
@@ -182,16 +207,16 @@ impl Database {
 
     pub async fn create_audio_timestamp(
         &self,
-        block_id: &Uuid,
-        recording_id: &Uuid,
+        block_id: &str,
+        recording_id: &str,
         secs: i32,
     ) -> Result<()> {
         sqlx::query!(
             r#"
             INSERT INTO audio_timestamps (block_id,recording_id,timestamp_seconds)
-            VALUES ($1,$2,$3)
+            VALUES (?1,?2,?3)
             ON CONFLICT (block_id,recording_id)
-              DO UPDATE SET timestamp_seconds = EXCLUDED.timestamp_seconds
+              DO UPDATE SET timestamp_seconds = excluded.timestamp_seconds
             "#,
             block_id,
             recording_id,
@@ -204,7 +229,7 @@ impl Database {
 
     pub async fn get_block_audio_timestamp(
         &self,
-        block_id: &Uuid,
+        block_id: &str,
     ) -> Result<Option<AudioTimestamp>> {
         let row = sqlx::query!(
             r#"
@@ -212,13 +237,13 @@ impl Database {
                    at.block_id,
                    at.recording_id,
                    at.timestamp_seconds,
-                   ar.page_id             as "page_id!:Uuid",
+                   ar.page_id,
                    ar.file_path,
                    ar.duration_seconds,
-                   ar.recorded_at         as "recorded_at?:DateTime<Utc>"
+                   ar.recorded_at
             FROM audio_timestamps at
             JOIN audio_recordings ar ON at.recording_id = ar.id
-            WHERE at.block_id=$1
+            WHERE at.block_id=?1
             "#,
             block_id
         )
@@ -226,16 +251,17 @@ impl Database {
         .await?;
 
         if let Some(r) = row {
+            let recording_id = r.recording_id.clone();
             Ok(Some(AudioTimestamp {
-                id: r.id,
+                id: r.id.unwrap_or(0) as i32,
                 block_id: r.block_id,
                 recording_id: r.recording_id,
-                timestamp_seconds: r.timestamp_seconds,
+                timestamp_seconds: r.timestamp_seconds as i32,
                 recording: Some(AudioRecording {
-                    id: r.recording_id,
+                    id: recording_id,
                     page_id: r.page_id,
                     file_path: r.file_path,
-                    duration_seconds: r.duration_seconds,
+                    duration_seconds: r.duration_seconds.map(|d| d as i32),
                     recorded_at: r.recorded_at,
                 }),
             }))
@@ -246,12 +272,12 @@ impl Database {
 
     /* ------------------------- private helper ----------------------- */
 
-    async fn get_block_with_audio_timestamp(&self, id: &Uuid) -> Result<Block> {
+    async fn get_block_with_audio_timestamp(&self, id: &str) -> Result<Block> {
         let mut blk = sqlx::query_as::<_, Block>(
             r#"
             SELECT id, content, parent_id, "order", is_page, page_title,
                    created_at, updated_at
-            FROM blocks WHERE id=$1
+            FROM blocks WHERE id=?1
             "#,
         )
         .bind(id)

@@ -109,7 +109,7 @@ cargo tauri build
 ## Usage
 
 ### Basic Note-Taking
-1. **Daily Notes**: Click on dates in the sidebar to create/open daily notes
+1. **Daily Notes**: Click on  es in the sidebar to create/open daily notes
 2. **Create Blocks**: Press Enter to create new bullet points
 3. **Edit Blocks**: Click on any block to edit its content
 4. **Link Pages**: Use `[[Page Name]]` syntax to create links between pages
