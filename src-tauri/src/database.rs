@@ -15,11 +15,21 @@ pub struct Database {
 
 impl Database {
     pub async fn new() -> Result<Self> {
-        // Create data directory if it doesn't exist
-        let data_dir = std::env::current_dir()?.join("data");
+        // Create data directory outside of the source tree to avoid file watching issues
+        let data_dir = if cfg!(target_os = "windows") {
+            std::env::temp_dir().join("gita").join("data")
+        } else {
+            std::path::PathBuf::from("/home/ubuntu/gita/data")
+        };
         std::fs::create_dir_all(&data_dir)?;
         
         let db_path = data_dir.join("gita.db");
+        
+        // Create the database file if it doesn't exist
+        if !db_path.exists() {
+            std::fs::File::create(&db_path)?;
+        }
+        
         let url = format!("sqlite://{}", db_path.to_string_lossy());
 
         let pool = SqlitePoolOptions::new()

@@ -23,9 +23,8 @@ function App() {
   useEffect(() => {
     // Add beforeunload handler to warn about unsaved changes
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      // Check if there are any pending auto-saves by checking if any textareas are in editing mode
-      const editingElements = document.querySelectorAll('.block-input.editing');
-      if (editingElements.length > 0) {
+      const { pendingSaves } = useAppStore.getState();
+      if (pendingSaves.size > 0) {
         e.preventDefault();
         e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
         return 'You have unsaved changes. Are you sure you want to leave?';

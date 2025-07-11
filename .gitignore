@@ -1,3 +1,6 @@
+# Gita database
+/src-tauri/data/gita.db
+
 # Logs
 logs
 *.log

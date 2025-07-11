@@ -63,6 +63,7 @@ interface AppState {
   currentPage?: Block;
   isLoading: boolean;
   error?: string;
+  pendingSaves: Set<string>; // Track blocks with pending saves
   
   // Audio state
   audioState: AudioState;
@@ -73,6 +74,9 @@ interface AppState {
   createBlock: (blockData: CreateBlockRequest, audioMeta?: AudioMeta) => Promise<Block>;
   updateBlockContent: (blockId: string, content: string) => Promise<void>;
   deleteBlock: (blockId: string) => Promise<void>;
+  addPendingSave: (blockId: string) => void;
+  removePendingSave: (blockId: string) => void;
+  waitForPendingSaves: () => Promise<void>;
   
   // Audio actions
   startRecording: (pageId: string) => Promise<void>;
@@ -88,6 +92,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   currentPage: undefined,
   isLoading: false,
   error: undefined,
+  pendingSaves: new Set(),
   audioState: {
     isRecording: false,
     devices: [],
@@ -95,6 +100,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Data actions
   loadDailyNote: async (date: string) => {
+    // Wait for any pending saves to complete
+    await get().waitForPendingSaves();
+    
     set({ isLoading: true, error: undefined });
     // @ts-expect-error __TAURI__ is injected by Tauri
     if (window.__TAURI__) {
@@ -141,6 +149,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   loadPage: async (title: string) => {
+    // Wait for any pending saves to complete
+    await get().waitForPendingSaves();
+    
     set({ isLoading: true, error: undefined });
     // @ts-expect-error __TAURI__ is injected by Tauri
     if (window.__TAURI__) {
@@ -278,6 +289,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   updateBlockContent: async (blockId: string, content: string) => {
+    const { addPendingSave, removePendingSave } = get();
+    addPendingSave(blockId);
+    
     // @ts-expect-error __TAURI__ is injected by Tauri
     if (window.__TAURI__) {
       try {
@@ -290,10 +304,14 @@ export const useAppStore = create<AppState>((set, get) => ({
               : block
           )
         }));
+        
+        console.log(`Successfully saved block ${blockId} with content: "${content}"`);
       } catch (error) {
         console.error("Error invoking update_block_content:", error);
         set({ error: error as string });
         throw error;
+      } finally {
+        removePendingSave(blockId);
       }
     } else {
       console.warn('Tauri API not found. Updating mock block for development.');
@@ -305,6 +323,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             : block
         )
       }));
+      removePendingSave(blockId);
     }
   },
 
@@ -443,6 +462,37 @@ export const useAppStore = create<AppState>((set, get) => ({
     audio.currentTime = audioTimestamp.timestamp_seconds;
     audio.play().catch(error => {
       console.error('Failed to play audio:', error);
+    });
+  },
+
+  // Pending save management
+  addPendingSave: (blockId: string) => {
+    set(state => {
+      const newPendingSaves = new Set(state.pendingSaves);
+      newPendingSaves.add(blockId);
+      return { pendingSaves: newPendingSaves };
+    });
+  },
+
+  removePendingSave: (blockId: string) => {
+    set(state => {
+      const newPendingSaves = new Set(state.pendingSaves);
+      newPendingSaves.delete(blockId);
+      return { pendingSaves: newPendingSaves };
+    });
+  },
+
+  waitForPendingSaves: async () => {
+    return new Promise((resolve) => {
+      const check = () => {
+        const { pendingSaves } = get();
+        if (pendingSaves.size === 0) {
+          resolve();
+        } else {
+          setTimeout(check, 50); // Check every 50ms
+        }
+      };
+      check();
     });
   },
 }));

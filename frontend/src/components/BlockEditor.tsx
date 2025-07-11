@@ -8,7 +8,7 @@ interface BlockEditorProps {
 }
 
 export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }) => {
-  const { updateBlockContent, deleteBlock, playAudioFromTimestamp } = useAppStore();
+  const { updateBlockContent, deleteBlock, playAudioFromTimestamp, addPendingSave, removePendingSave } = useAppStore();
   const [isEditing, setIsEditing] = useState(false);
   const [content, setContent] = useState(block.content || '');
   const [isSaving, setIsSaving] = useState(false);
@@ -33,16 +33,19 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
       
       if (newContent !== block.content) {
         try {
+          addPendingSave(block.id);
           setIsSaving(true);
           await updateBlockContent(block.id, newContent);
+          console.log(`Auto-saved block ${block.id} with content: "${newContent}"`);
         } catch (error) {
           console.error('Auto-save failed:', error);
         } finally {
           setIsSaving(false);
+          removePendingSave(block.id);
         }
       }
-    }, 500); // Save after 500ms of no typing
-  }, [block.id, block.content, updateBlockContent]);
+    }, 200); // Save after 200ms of no typing (reduced from 500ms)
+  }, [block.id, block.content, updateBlockContent, addPendingSave, removePendingSave]);
 
   // Clean up timeout on unmount
   useEffect(() => {
@@ -76,13 +79,16 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
 
     if (content !== block.content) {
       try {
+        addPendingSave(block.id);
         setIsSaving(true);
         await updateBlockContent(block.id, content);
+        console.log(`Manually saved block ${block.id} with content: "${content}"`);
       } catch (error) {
         console.error('Save failed:', error);
         throw error;
       } finally {
         setIsSaving(false);
+        removePendingSave(block.id);
       }
     }
     setIsEditing(false);
@@ -150,7 +156,6 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
             value={content}
             onChange={(e) => handleContentChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            onBlur={handleSave}
             onInput={adjustTextareaHeight}
             className="block-input editing"
             rows={1}
