@@ -59,6 +59,23 @@ export const MainEditor: React.FC = () => {
     }
   };
 
+  // Save new block content on unmount if it exists
+  useEffect(() => {
+    return () => {
+      if (newBlockContent.trim() && currentPage) {
+        // Fire and forget, no need to await
+        createBlock({
+          content: newBlockContent,
+          parent_id: currentPage.id,
+          order: sortedBlocks.length,
+          is_page: false,
+        }).catch(error => {
+          console.error('Failed to save new block on unmount:', error);
+        });
+      }
+    };
+  }, [newBlockContent, currentPage, createBlock, sortedBlocks.length]);
+
   const renderContent = (content: string) => {
     // Simple implementation of [[Page Link]] parsing
     const linkRegex = /\[\[([^\]]+)\]\]/g;
