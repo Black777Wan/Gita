@@ -1,6 +1,7 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Play, Volume2 } from 'lucide-react';
 import { useAppStore, Block } from '../store/appStore';
+import debounce from 'lodash.debounce';
 
 interface BlockEditorProps {
   block: Block;
@@ -8,58 +9,54 @@ interface BlockEditorProps {
 }
 
 export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }) => {
-  const { updateBlockContent, deleteBlock, playAudioFromTimestamp, addPendingSave, removePendingSave } = useAppStore();
+  const { updateBlockContent, deleteBlock, playAudioFromTimestamp } = useAppStore();
   const [isEditing, setIsEditing] = useState(false);
   const [content, setContent] = useState(block.content || '');
   const [isSaving, setIsSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null); // No longer needed
 
   useEffect(() => {
     setContent(block.content || '');
   }, [block.content]);
 
-  // Auto-save with debounce
-  const debouncedSave = useCallback(async (newContent: string) => {
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
+  const performSave = useCallback(async (newContent: string) => {
+    if (newContent.trim() === '' && newContent !== block.content) {
+      // If content became empty, and it wasn't already empty, it will be handled by explicit save/delete
+      // This prevents auto-deleting blocks while typing if user temporarily clears content
+      return;
     }
-    
-    saveTimeoutRef.current = setTimeout(async () => {
-      if (newContent.trim() === '') {
-        // Don't auto-delete empty blocks, only on explicit save
-        return;
-      }
-      
-      if (newContent !== block.content) {
-        try {
-          setIsSaving(true);
-          await updateBlockContent(block.id, newContent);
-          console.log(`Auto-saved block ${block.id} with content: "${newContent}"`);
-        } catch (error) {
-          console.error('Auto-save failed:', error);
-        } finally {
-          setIsSaving(false);
-        }
-      }
-    }, 200); // Save after 200ms of no typing (reduced from 500ms)
+    if (newContent === block.content) {
+      return; // No change, no need to save
+    }
+
+    try {
+      setIsSaving(true);
+      await updateBlockContent(block.id, newContent);
+      console.log(`Auto-saved block ${block.id} with content: "${newContent}"`);
+    } catch (error) {
+      console.error('Auto-save failed:', error);
+      // Optionally, revert content or notify user
+    } finally {
+      setIsSaving(false);
+    }
   }, [block.id, block.content, updateBlockContent]);
+
+  const debouncedSave = useMemo(() => {
+    return debounce(performSave, 300); // Save after 300ms of no typing
+  }, [performSave]);
+
 
   // Clean up timeout on unmount and ensure any pending saves are handled
   useEffect(() => {
     return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-        // Force immediate save if content differs and not empty
-        if (content !== block.content && content.trim() !== '') {
-          // Fire and forget - component is unmounting
-          updateBlockContent(block.id, content).catch(error => {
-            console.error('Failed to save on unmount:', error);
-          });
-        }
+      // If there's pending debounced save, flush it.
+      if (content !== block.content && content.trim() !== '') {
+        debouncedSave.flush();
       }
+      debouncedSave.cancel(); // Cancel any future invocations
     };
-  }, [block.id, block.content, content, updateBlockContent]);
+  }, [debouncedSave, content, block.content]);
 
   const handleEdit = () => {
     setIsEditing(true);
@@ -70,18 +67,21 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
   };
 
   const handleSave = async () => {
-    // Clear any pending auto-save
-    if (saveTimeoutRef.current) {
-      clearTimeout(saveTimeoutRef.current);
-      saveTimeoutRef.current = null;
-    }
+    // Immediately trigger and flush any pending debounced save.
+    debouncedSave.flush();
+    debouncedSave.cancel(); // Cancel subsequent automatic saves.
 
     if (content.trim() === '') {
-      // Delete empty block
-      await deleteBlock(block.id);
+      try {
+        await deleteBlock(block.id);
+      } catch (error) {
+        console.error('Failed to delete block:', error);
+      }
       return;
     }
 
+    // Since flush() is async in its effect, we might need to manually save if content is different
+    // and the debounced function hasn't fired yet.
     if (content !== block.content) {
       try {
         setIsSaving(true);
@@ -89,7 +89,6 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
         console.log(`Manually saved block ${block.id} with content: "${content}"`);
       } catch (error) {
         console.error('Save failed:', error);
-        throw error;
       } finally {
         setIsSaving(false);
       }
@@ -97,19 +96,16 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
     setIsEditing(false);
   };
 
-  const handleBlur = async () => {
+  const handleBlur = () => {
     // Force save on blur to prevent data loss during navigation
-    try {
-      await handleSave();
-    } catch (error) {
-      // Keep editing if save failed
-      console.error('Save on blur failed:', error);
+    if (content !== block.content) {
+      debouncedSave.flush();
     }
+    setIsEditing(false);
   };
 
   const handleContentChange = (newContent: string) => {
     setContent(newContent);
-    // Trigger auto-save
     debouncedSave(newContent);
   };
 
@@ -118,6 +114,7 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
       e.preventDefault();
       handleSave();
     } else if (e.key === 'Escape') {
+      debouncedSave.cancel(); // Cancel any pending save
       setContent(block.content || '');
       setIsEditing(false);
     }
