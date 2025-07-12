@@ -77,6 +77,8 @@ interface AppState {
   addPendingSave: (blockId: string) => void;
   removePendingSave: (blockId: string) => void;
   waitForPendingSaves: () => Promise<void>;
+  getPendingSaveInfo: () => { count: number; blockIds: string[] };
+  forceSaveAll: () => Promise<void>;
   
   // Audio actions
   startRecording: (pageId: string) => Promise<void>;
@@ -290,11 +292,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   updateBlockContent: async (blockId: string, content: string) => {
     const { addPendingSave, removePendingSave } = get();
-    addPendingSave(blockId);
     
     // @ts-expect-error __TAURI__ is injected by Tauri
     if (window.__TAURI__) {
       try {
+        addPendingSave(blockId);
         await invoke('update_block_content', { blockId, content });
 
         set(state => ({
@@ -316,14 +318,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     } else {
       console.warn('Tauri API not found. Updating mock block for development.');
       // Update mock block
-      set(state => ({
-        blocks: state.blocks.map(block =>
-          block.id === blockId
-            ? { ...block, content, updated_at: new Date().toISOString() }
-            : block
-        )
-      }));
-      removePendingSave(blockId);
+      addPendingSave(blockId);
+      try {
+        set(state => ({
+          blocks: state.blocks.map(block =>
+            block.id === blockId
+              ? { ...block, content, updated_at: new Date().toISOString() }
+              : block
+          )
+        }));
+      } finally {
+        removePendingSave(blockId);
+      }
     }
   },
 
@@ -483,17 +489,53 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   waitForPendingSaves: async () => {
-    return new Promise((resolve) => {
+    return new Promise<void>((resolve) => {
+      const maxWaitTime = 5000; // Maximum wait time of 5 seconds
+      const startTime = Date.now();
+      
       const check = () => {
         const { pendingSaves } = get();
+        const elapsedTime = Date.now() - startTime;
+        
         if (pendingSaves.size === 0) {
           resolve();
+        } else if (elapsedTime >= maxWaitTime) {
+          console.warn(`Timeout waiting for pending saves. ${pendingSaves.size} saves still pending.`);
+          resolve(); // Resolve anyway to prevent infinite blocking
         } else {
+          console.log(`Waiting for ${pendingSaves.size} pending saves to complete...`);
           setTimeout(check, 50); // Check every 50ms
         }
       };
       check();
     });
+  },
+
+  // Debug utilities
+  getPendingSaveInfo: () => {
+    const { pendingSaves } = get();
+    return {
+      count: pendingSaves.size,
+      blockIds: Array.from(pendingSaves)
+    };
+  },
+
+  forceSaveAll: async () => {
+    const { pendingSaves, blocks, updateBlockContent } = get();
+    const pendingBlocks = Array.from(pendingSaves);
+    
+    console.log(`Force saving ${pendingBlocks.length} pending changes...`);
+    
+    for (const blockId of pendingBlocks) {
+      const block = blocks.find(b => b.id === blockId);
+      if (block) {
+        try {
+          await updateBlockContent(blockId, block.content || '');
+        } catch (error) {
+          console.error(`Failed to force save block ${blockId}:`, error);
+        }
+      }
+    }
   },
 }));
 

@@ -49,10 +49,14 @@ export const MainEditor: React.FC = () => {
     }
   };
 
-  const handlePageTitleClick = (title: string) => {
-    // Navigate to linked page
-    const { loadPage } = useAppStore.getState();
-    loadPage(title);
+  const handlePageTitleClick = async (title: string) => {
+    // Navigate to linked page - wait for pending saves
+    try {
+      const { loadPage } = useAppStore.getState();
+      await loadPage(title);
+    } catch (error) {
+      console.error('Failed to navigate to page:', title, error);
+    }
   };
 
   const renderContent = (content: string) => {

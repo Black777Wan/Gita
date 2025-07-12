@@ -33,7 +33,6 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
       
       if (newContent !== block.content) {
         try {
-          addPendingSave(block.id);
           setIsSaving(true);
           await updateBlockContent(block.id, newContent);
           console.log(`Auto-saved block ${block.id} with content: "${newContent}"`);
@@ -41,20 +40,26 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
           console.error('Auto-save failed:', error);
         } finally {
           setIsSaving(false);
-          removePendingSave(block.id);
         }
       }
     }, 200); // Save after 200ms of no typing (reduced from 500ms)
-  }, [block.id, block.content, updateBlockContent, addPendingSave, removePendingSave]);
+  }, [block.id, block.content, updateBlockContent]);
 
-  // Clean up timeout on unmount
+  // Clean up timeout on unmount and ensure any pending saves are handled
   useEffect(() => {
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
+        // Force immediate save if content differs and not empty
+        if (content !== block.content && content.trim() !== '') {
+          // Fire and forget - component is unmounting
+          updateBlockContent(block.id, content).catch(error => {
+            console.error('Failed to save on unmount:', error);
+          });
+        }
       }
     };
-  }, []);
+  }, [block.id, block.content, content, updateBlockContent]);
 
   const handleEdit = () => {
     setIsEditing(true);
@@ -79,7 +84,6 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
 
     if (content !== block.content) {
       try {
-        addPendingSave(block.id);
         setIsSaving(true);
         await updateBlockContent(block.id, content);
         console.log(`Manually saved block ${block.id} with content: "${content}"`);
@@ -88,10 +92,19 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
         throw error;
       } finally {
         setIsSaving(false);
-        removePendingSave(block.id);
       }
     }
     setIsEditing(false);
+  };
+
+  const handleBlur = async () => {
+    // Force save on blur to prevent data loss during navigation
+    try {
+      await handleSave();
+    } catch (error) {
+      // Keep editing if save failed
+      console.error('Save on blur failed:', error);
+    }
   };
 
   const handleContentChange = (newContent: string) => {
@@ -156,6 +169,7 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
             value={content}
             onChange={(e) => handleContentChange(e.target.value)}
             onKeyDown={handleKeyDown}
+            onBlur={handleBlur}
             onInput={adjustTextareaHeight}
             className="block-input editing"
             rows={1}
