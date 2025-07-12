@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT at.id,\n                   at.block_id,\n                   at.recording_id,\n                   at.timestamp_seconds,\n                   ar.page_id,\n                   ar.file_path,\n                   ar.duration_seconds,\n                   ar.recorded_at\n            FROM audio_timestamps at\n            JOIN audio_recordings ar ON at.recording_id = ar.id\n            WHERE at.block_id=?1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "block_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "recording_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "timestamp_seconds",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "page_id",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "file_path",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "duration_seconds",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "recorded_at",
+        "ordinal": 7,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "735910131a738d858c2cf1d0dc2f2baa1e5ae3ed0d13e64e36277b376d94f21c"
+}

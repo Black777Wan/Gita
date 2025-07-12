@@ -14,33 +14,52 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
   const [content, setContent] = useState(block.content || '');
   const [isSaving, setIsSaving] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null); // No longer needed
+  const blockRef = useRef(block);
+  
+  // Keep block ref updated
+  useEffect(() => {
+    blockRef.current = block;
+  }, [block]);
 
   useEffect(() => {
     setContent(block.content || '');
   }, [block.content]);
 
+  const updateBlockContentRef = useRef(updateBlockContent);
+  const deleteBlockRef = useRef(deleteBlock);
+  const playAudioFromTimestampRef = useRef(playAudioFromTimestamp);
+  
+  // Keep function refs updated
+  useEffect(() => {
+    updateBlockContentRef.current = updateBlockContent;
+    deleteBlockRef.current = deleteBlock;
+    playAudioFromTimestampRef.current = playAudioFromTimestamp;
+  }, [updateBlockContent, deleteBlock, playAudioFromTimestamp]);
+
   const performSave = useCallback(async (newContent: string) => {
-    if (newContent.trim() === '' && newContent !== block.content) {
+    // Get the current block content to compare against
+    const currentBlockContent = blockRef.current.content || '';
+    
+    if (newContent.trim() === '' && newContent !== currentBlockContent) {
       // If content became empty, and it wasn't already empty, it will be handled by explicit save/delete
       // This prevents auto-deleting blocks while typing if user temporarily clears content
       return;
     }
-    if (newContent === block.content) {
+    if (newContent === currentBlockContent) {
       return; // No change, no need to save
     }
 
     try {
       setIsSaving(true);
-      await updateBlockContent(block.id, newContent);
-      console.log(`Auto-saved block ${block.id} with content: "${newContent}"`);
+      await updateBlockContentRef.current(blockRef.current.id, newContent);
+      console.log(`Auto-saved block ${blockRef.current.id} with content: "${newContent}"`);
     } catch (error) {
       console.error('Auto-save failed:', error);
       // Optionally, revert content or notify user
     } finally {
       setIsSaving(false);
     }
-  }, [block.id, block.content, updateBlockContent]);
+  }, []); // No dependencies - all accessed via refs
 
   const debouncedSave = useMemo(() => {
     return debounce(performSave, 300); // Save after 300ms of no typing
@@ -50,13 +69,10 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
   // Clean up timeout on unmount and ensure any pending saves are handled
   useEffect(() => {
     return () => {
-      // If there's pending debounced save, flush it.
-      if (content !== block.content && content.trim() !== '') {
-        debouncedSave.flush();
-      }
-      debouncedSave.cancel(); // Cancel any future invocations
+      // Cancel any future invocations on unmount
+      debouncedSave.cancel();
     };
-  }, [debouncedSave, content, block.content]);
+  }, [debouncedSave]);
 
   const handleEdit = () => {
     setIsEditing(true);
@@ -73,7 +89,7 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
 
     if (content.trim() === '') {
       try {
-        await deleteBlock(block.id);
+        await deleteBlockRef.current(blockRef.current.id);
       } catch (error) {
         console.error('Failed to delete block:', error);
       }
@@ -82,11 +98,11 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
 
     // Since flush() is async in its effect, we might need to manually save if content is different
     // and the debounced function hasn't fired yet.
-    if (content !== block.content) {
+    if (content !== blockRef.current.content) {
       try {
         setIsSaving(true);
-        await updateBlockContent(block.id, content);
-        console.log(`Manually saved block ${block.id} with content: "${content}"`);
+        await updateBlockContentRef.current(blockRef.current.id, content);
+        console.log(`Manually saved block ${blockRef.current.id} with content: "${content}"`);
       } catch (error) {
         console.error('Save failed:', error);
       } finally {
@@ -98,16 +114,19 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
 
   const handleBlur = () => {
     // Force save on blur to prevent data loss during navigation
-    if (content !== block.content) {
+    if (content !== blockRef.current.content) {
       debouncedSave.flush();
     }
     setIsEditing(false);
   };
 
-  const handleContentChange = (newContent: string) => {
+  const handleContentChange = useCallback((newContent: string) => {
     setContent(newContent);
-    debouncedSave(newContent);
-  };
+    // Only call debounced save if content actually changed from the original block content
+    if (newContent !== blockRef.current.content) {
+      debouncedSave(newContent);
+    }
+  }, [debouncedSave]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -115,14 +134,14 @@ export const BlockEditor: React.FC<BlockEditorProps> = ({ block, renderContent }
       handleSave();
     } else if (e.key === 'Escape') {
       debouncedSave.cancel(); // Cancel any pending save
-      setContent(block.content || '');
+      setContent(blockRef.current.content || '');
       setIsEditing(false);
     }
   };
 
   const handlePlayAudio = () => {
-    if (block.audio_timestamp) {
-      playAudioFromTimestamp(block.audio_timestamp);
+    if (blockRef.current.audio_timestamp) {
+      playAudioFromTimestampRef.current(blockRef.current.audio_timestamp);
     }
   };
 

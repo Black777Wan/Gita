@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE audio_recordings SET duration_seconds=?1 WHERE id=?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2794625373b8191bf9df7c42e07b978b610e1d927d62c21d19b72e554b2d074c"
+}

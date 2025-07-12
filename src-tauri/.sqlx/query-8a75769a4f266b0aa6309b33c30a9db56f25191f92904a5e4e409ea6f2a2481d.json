@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO audio_timestamps (block_id,recording_id,timestamp_seconds)\n            VALUES (?1,?2,?3)\n            ON CONFLICT (block_id,recording_id)\n              DO UPDATE SET timestamp_seconds = excluded.timestamp_seconds\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "8a75769a4f266b0aa6309b33c30a9db56f25191f92904a5e4e409ea6f2a2481d"
+}

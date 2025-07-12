@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE blocks SET content=?1, updated_at=?2 WHERE id=?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "a042b2410c687e78c61a3e0ffc1d4a2a6c013107d4e6a890dae1f407b563f45c"
+}
